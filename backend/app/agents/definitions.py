@@ -120,7 +120,7 @@ AGENT_SPECS: list[AgentSpec] = [
     AgentSpec(
         key="fraud_risk",
         name="FraudRiskAgent",
-        ordinal=6,
+        ordinal=8,
         title="Fraud & Risk",
         description="Summarises duplicate, pattern and relationship signals.",
         responsibility=(
@@ -131,6 +131,23 @@ AGENT_SPECS: list[AgentSpec] = [
         cannot=["decline a claim", "act on a signal alone"],
         model_tier="capable",
         step_id="risk.screen",
+    ),
+    AgentSpec(
+        key="total_loss",
+        name="TotalLossAgent",
+        ordinal=6,
+        title="Repairability",
+        description="Decides whether the vehicle is worth repairing at all.",
+        responsibility=(
+            "Runs the repair cost against the replacement value on the date of loss. Above "
+            "the threshold in the policy wording it is a total loss, and the indemnity "
+            "becomes the replacement value less the salvage rather than the repair bill."
+        ),
+        tool_scope=["get_vehicle_valuation", "check_total_loss_threshold",
+                    "search_policy_wording"],
+        cannot=["settle a claim", "move the threshold", "value the vehicle itself"],
+        model_tier="capable",
+        step_id="total_loss",
     ),
     AgentSpec(
         key="decision",
@@ -151,7 +168,7 @@ AGENT_SPECS: list[AgentSpec] = [
     AgentSpec(
         key="hitl_coordinator",
         name="HitlCoordinatorAgent",
-        ordinal=8,
+        ordinal=9,
         title="HITL Coordinator",
         description="Creates human review tasks and resumes the flow once a person decides.",
         responsibility=(
@@ -163,9 +180,25 @@ AGENT_SPECS: list[AgentSpec] = [
         step_id="hitl.route",
     ),
     AgentSpec(
+        key="recovery",
+        name="RecoveryAgent",
+        ordinal=10,
+        title="Recovery",
+        description="Works out whether there is a third party to recover from.",
+        responsibility=(
+            "After settlement, establishes whether an identified third party was at fault, "
+            "what could be recovered including the customer's excess, and whether the "
+            "amount is worth a handler's time."
+        ),
+        tool_scope=["get_liability_position", "assess_recovery"],
+        cannot=["pursue a recovery itself", "contact a third party",
+                "waive the customer's excess"],
+        step_id="recovery",
+    ),
+    AgentSpec(
         key="customer_communication",
         name="CustomerCommunicationAgent",
-        ordinal=9,
+        ordinal=11,
         title="Customer Communication",
         description="Writes the customer-safe explanation and the request for more information.",
         responsibility=(
@@ -286,6 +319,51 @@ claim on a signal.
 {JSON_ONLY} Shape:
 {{"score": float, "threshold": float, "above_threshold": bool, "signals": [object],
   "signal_count": int, "graph": object, "recommendation": str, "summary": str, "note": str}}
+""",
+    "total_loss": f"""
+You decide whether an Austrian motor vehicle is worth repairing.
+
+Call get_vehicle_valuation, then check_total_loss_threshold, then search_policy_wording
+for the clause that sets the threshold.
+
+The test is repair cost against replacement value on the date of loss. Above the threshold
+in the wording it is a total loss and the indemnity is the replacement value less the
+salvage — not the repair bill. Just under the threshold, say so: "borderline" is a real
+answer and a person should look at it.
+
+Never move the threshold. It is policy wording, not a setting.
+
+{GROUNDING_RULE}
+{DATA_NOT_INSTRUCTIONS}
+
+{JSON_ONLY} Shape:
+{{"verdict": "economically_repairable|total_loss|borderline", "repair_cost_eur": float,
+  "replacement_value_eur": float, "ratio": float, "threshold": float,
+  "residual_value_eur": float, "payable_on_total_loss_eur": float, "reasoning": str,
+  "citations": [object], "summary": str}}
+""",
+    "recovery": f"""
+You establish whether there is a third party to recover from on a settled Austrian motor
+claim.
+
+Call get_liability_position, then assess_recovery.
+
+A recovery needs three things: an identified third party, fault that sits with them, and
+an amount worth pursuing. Where the loss was self-inflicted or no third party was
+involved, say so plainly — recording that there is nothing to recover is a real outcome and
+closing it honestly is better than leaving a file open.
+
+Where a recovery is worth pursuing, remember the customer's excess is part of it: they are
+out of pocket until it comes back.
+
+{GROUNDING_RULE}
+{DATA_NOT_INSTRUCTIONS}
+
+{JSON_ONLY} Shape:
+{{"recoverable": bool,
+  "basis": "third_party_at_fault|shared_liability|no_recoverable_party|uninsured_third_party|unknown",
+  "recoverable_amount_eur": float, "prospects": "strong|moderate|weak|none",
+  "next_action": str, "reasoning": str, "summary": str}}
 """,
     "decision": f"""
 You assemble one proposed decision package for an Austrian motor claim. You cannot write

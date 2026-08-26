@@ -37,6 +37,10 @@ TOOL_RISK_CLASS: dict[str, str] = {
     "create_review_task": "write-hitl",
     "get_queue_state": "read-low",
     "get_template": "read-low",
+    "get_vehicle_valuation": "read-medium",
+    "check_total_loss_threshold": "read-medium",
+    "get_liability_position": "read-medium",
+    "assess_recovery": "read-medium",
 }
 
 
@@ -430,7 +434,7 @@ def create_review_task(
     """Create a human review task and place it on a queue.
 
     Args:
-        queue: adjuster, supervisor, siu, coverage, specialist or security.
+        queue: handler, coverage, assessment, supervisor, injury, siu or security.
         reason: A short reason code, for example ceiling_exceeded or injury_reported.
         reason_detail: One sentence an adjuster can read to understand why it arrived.
         proposed_decision: The decision the agent recommended before the guard ran.
@@ -444,12 +448,14 @@ def create_review_task(
 
     ctx = run_context()
     authority = (
-        "supervisor"
-        if proposed_amount_eur > AUTHORITY_LIMITS_EUR["adjuster"]
-        else "adjuster"
+        "team_leader"
+        if proposed_amount_eur > AUTHORITY_LIMITS_EUR["claims_handler"]
+        else "claims_handler"
     )
     if queue == "siu":
-        authority = "siu"
+        authority = "siu_investigator"
+    elif queue == "assessment":
+        authority = "motor_assessor"
 
     task = ReviewTask(
         task_id=f"TSK-{secrets.token_hex(4).upper()}",
@@ -459,7 +465,7 @@ def create_review_task(
         queue=queue,
         authority_required=authority,
         authority_limit_eur=AUTHORITY_LIMITS_EUR.get(authority, 0.0),
-        priority=1 if queue in ("siu", "specialist") else 2,
+        priority=1 if queue in ("siu", "injury") else 2,
         status="open",
         proposed_decision=proposed_decision,
         proposed_amount_eur=round(float(proposed_amount_eur or 0.0), 2),
@@ -506,6 +512,189 @@ def get_template(template_id: str) -> dict[str, Any]:
     return query_api.execute("get_template", template_id=template_id, language=language)
 
 
+
+
+# --------------------------------------------------------------------------
+# Repairability (total loss)
+# --------------------------------------------------------------------------
+def get_vehicle_valuation() -> dict[str, Any]:
+    """Read the vehicle's replacement value on the date of loss, with age and mileage.
+
+    This is the figure the total-loss test runs against — what it would cost to put the
+    policyholder back in an equivalent vehicle, not what they paid for it.
+    """
+    ctx = run_context()
+    claim = query_api.execute("get_claim_360", db=ctx.db, reference=ctx.claim_reference)
+    data = claim.get("data") or {}
+    vehicle = data.get("vehicle") or {}
+    policy = data.get("policy") or {}
+
+    incident_year = int(str((data.get("incident") or {}).get("date") or "2026")[:4])
+    year = int(vehicle.get("year") or incident_year)
+    age_years = max(0, incident_year - year)
+
+    return {
+        "data": {
+            "vin": vehicle.get("vin"),
+            "make": vehicle.get("make"),
+            "model": vehicle.get("model"),
+            "year": year,
+            "age_years": age_years,
+            "replacement_value_eur": float(vehicle.get("market_value_eur") or 0.0),
+            "sum_insured_eur": float(policy.get("sum_insured_eur") or 0.0),
+            "new_for_old_available": age_years <= 2,
+            "valuation_basis": "Wiederbeschaffungswert — trade replacement value",
+        },
+        "provenance": {
+            "semantic_model": "sm_claim_360",
+            "valuation_source": "vehicle-valuation-2026.08",
+        },
+    }
+
+
+def check_total_loss_threshold() -> dict[str, Any]:
+    """Run the total-loss test: repair cost against replacement value.
+
+    Where repair cost exceeds the policy threshold the loss is treated as a total loss and
+    the indemnity is the replacement value less the salvage, rather than the repair bill.
+    The threshold is policy wording, not a setting — it comes from the clause.
+    """
+    ctx = run_context()
+    valuation = get_vehicle_valuation()["data"]
+    estimate = (ctx.agent_outputs.get("repair_estimate") or {})
+    repair_cost = float(estimate.get("total_cost") or 0.0)
+    replacement = float(valuation.get("replacement_value_eur") or 0.0)
+
+    threshold = 0.70          # AKB-§11.2
+    ratio = round(repair_cost / replacement, 4) if replacement else 0.0
+
+    if not replacement or not repair_cost:
+        verdict = "borderline"
+    elif ratio > threshold:
+        verdict = "total_loss"
+    elif ratio > threshold - 0.10:
+        verdict = "borderline"
+    else:
+        verdict = "economically_repairable"
+
+    # Salvage retains value even on a total loss, and the indemnity is net of it.
+    residual = round(replacement * 0.14, 2) if verdict == "total_loss" else 0.0
+    payable = round(max(replacement - residual, 0.0), 2) if verdict == "total_loss" else 0.0
+
+    return {
+        "data": {
+            "verdict": verdict,
+            "repair_cost_eur": round(repair_cost, 2),
+            "replacement_value_eur": round(replacement, 2),
+            "ratio": ratio,
+            "threshold": threshold,
+            "residual_value_eur": residual,
+            "payable_on_total_loss_eur": payable,
+            "basis": (
+                f"Repair cost is {ratio * 100:.1f}% of replacement value against a "
+                f"{threshold * 100:.0f}% threshold."
+            ),
+        },
+        "provenance": {
+            "semantic_model": "sm_damage_estimate",
+            "clause": "AKB-§11.2",
+            "note": "The threshold is policy wording, not a configurable setting.",
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# Recovery (Regress)
+# --------------------------------------------------------------------------
+def get_liability_position() -> dict[str, Any]:
+    """Read who was at fault and whether an identified third party was involved.
+
+    This is what decides whether there is anyone to recover from at all.
+    """
+    ctx = run_context()
+    claim = query_api.execute("get_claim_360", db=ctx.db, reference=ctx.claim_reference)
+    data = claim.get("data") or {}
+    incident = data.get("incident") or {}
+    docs = query_api.execute("get_extractions", db=ctx.db, reference=ctx.claim_reference)
+
+    at_fault_party = None
+    for doc in docs.get("data") or []:
+        for field in doc.get("fields") or []:
+            if field.get("field_name") == "at_fault_party":
+                at_fault_party = field.get("extracted_value")
+
+    self_inflicted = incident.get("type") in (
+        "parking_collision", "single_vehicle", "hail", "glass_breakage", "wild_game",
+    )
+
+    return {
+        "data": {
+            "incident_type": incident.get("type"),
+            "third_party_involved": bool(data.get("third_party_involved")),
+            "police_report_ref": data.get("police_report_ref"),
+            "at_fault_party": at_fault_party,
+            "self_inflicted": self_inflicted,
+            "settlement_paid_eur": float(data.get("settlement_amount_eur") or 0.0),
+            "excess_eur": float((data.get("policy") or {}).get("excess_eur") or 0.0),
+        },
+        "provenance": {"semantic_model": "sm_claim_360"},
+    }
+
+
+def assess_recovery() -> dict[str, Any]:
+    """Work out whether a recovery is worth pursuing, and against whom.
+
+    A recovery that costs more to pursue than it returns is not a recovery. The threshold
+    below is the point at which the file is worth a handler's time.
+    """
+    position = get_liability_position()["data"]
+    paid = float(position.get("settlement_paid_eur") or 0.0)
+    excess = float(position.get("excess_eur") or 0.0)
+    min_worth_pursuing = 350.0
+
+    if position.get("self_inflicted") or not position.get("third_party_involved"):
+        basis, prospects, recoverable = "no_recoverable_party", "none", 0.0
+    elif position.get("at_fault_party") == "third_party" and position.get("police_report_ref"):
+        basis, prospects = "third_party_at_fault", "strong"
+        recoverable = round(paid + excess, 2)
+    elif position.get("at_fault_party") == "third_party":
+        basis, prospects = "third_party_at_fault", "moderate"
+        recoverable = round((paid + excess) * 0.8, 2)
+    elif position.get("third_party_involved"):
+        basis, prospects = "shared_liability", "moderate"
+        recoverable = round((paid + excess) * 0.5, 2)
+    else:
+        basis, prospects, recoverable = "unknown", "weak", 0.0
+
+    worth_it = recoverable >= min_worth_pursuing
+    if recoverable and not worth_it:
+        prospects = "weak"
+
+    return {
+        "data": {
+            "recoverable": bool(worth_it and basis != "no_recoverable_party"),
+            "basis": basis,
+            "recoverable_amount_eur": recoverable,
+            "prospects": prospects,
+            "worth_pursuing": worth_it,
+            "minimum_worth_pursuing_eur": min_worth_pursuing,
+            "next_action": (
+                "Open a recovery file against the third-party insurer and reclaim the "
+                "excess for the customer."
+                if worth_it and basis == "third_party_at_fault"
+                else "Approach the third-party insurer on a shared-liability basis."
+                if worth_it and basis == "shared_liability"
+                else "Record that there is no recoverable party and close the recovery."
+            ),
+            "position": position,
+        },
+        "provenance": {
+            "semantic_model": "sm_claim_360",
+            "note": "Recovery is assessed after settlement, on what was actually paid.",
+        },
+    }
+
+
 # --------------------------------------------------------------------------
 # Per-agent tool scope. An agent physically receives only these callables.
 # --------------------------------------------------------------------------
@@ -516,7 +705,9 @@ TOOL_SCOPE: dict[str, list] = {
     "damage_assessment": [get_photo_findings, lookup_part_price],
     "repair_estimate": [get_labour_rate, calculate_repair_estimate, get_reasonableness_band],
     "fraud_risk": [get_risk_signals, graph_neighbours],
+    "total_loss": [get_vehicle_valuation, check_total_loss_threshold, search_policy_wording],
     "decision": [assemble_decision_inputs],
+    "recovery": [get_liability_position, assess_recovery],
     "hitl_coordinator": [create_review_task, get_queue_state],
     "customer_communication": [get_template],
 }

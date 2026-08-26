@@ -10,10 +10,10 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import CORS_ORIGINS, TENANT_NAME, model_mode
+from app.config import CORS_ORIGIN_REGEX, CORS_ORIGINS, TENANT_NAME, model_mode
 from app.db import SessionLocal, init_db
 from app.models import Claim
-from app.routers import claims, insights, platform, review, security
+from app.routers import claims, insights, platform, review, security, workspace
 
 # ADK logs a full traceback for a model error and then re-raises it. The orchestrator
 # catches that error and reports it in words an operator can act on, so the duplicate
@@ -36,16 +36,38 @@ app = FastAPI(
     version="1.0.0",
 )
 
+_local_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS + ["http://localhost:5173", "http://localhost:4173"],
+    allow_origins=list(dict.fromkeys([*CORS_ORIGINS, *_local_origins])),
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-for r in (platform.router, claims.router, review.router, security.router, insights.router):
+for r in (platform.router, workspace.router, claims.router, review.router,
+          security.router, insights.router):
     app.include_router(r)
+
+
+@app.on_event("startup")
+async def probe_providers() -> None:
+    """Find out which model providers can actually be called, once, up front."""
+    from app.agents.model_health import prime
+
+    try:
+        report = await prime()
+        for provider, health in report.items():
+            state = "reachable" if health["reachable"] else "UNAVAILABLE"
+            logging.info("provider %s: %s — %s", provider, state, health["detail"])
+    except Exception as exc:  # noqa: BLE001 — never block startup on a probe
+        logging.warning("Provider probe failed: %s", exc)
 
 
 @app.on_event("startup")

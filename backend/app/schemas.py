@@ -19,21 +19,50 @@ Eur = Annotated[float, Field(ge=0.0)]
 
 
 class Strict(BaseModel):
-    """Reject anything the contract does not name."""
+    """Reject anything the contract does not name.
+
+    Used for whatever a model produces directly, so a hallucinated field is an error
+    rather than something that quietly travels downstream.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
 
+class Lenient(BaseModel):
+    """Accept the shape, ignore the surplus.
+
+    Used for the value objects that wrap tool output. Types, enums and ranges are still
+    enforced; what is dropped is only the reference detail the tool layer attaches.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+
 # --------------------------------------------------------------------------
-class Citation(Strict):
+class Citation(BaseModel):
+    """A clause an answer rests on.
+
+    Unlike the agent-level contracts this one *ignores* extra keys rather than rejecting
+    them: a citation is reference data flowing out of retrieval, and the retrieval layer
+    legitimately attaches scoring detail that is not part of the citation itself. What the
+    model produces is still held to a strict contract — this is not.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
     clause_id: str
     title: str = ""
     section: str = ""
     page: int = 0
     quote: str = ""
+    document: str = ""
+    document_title: str = ""
+    version: str = ""
+    effective_from: str = ""
+    jurisdiction: str = ""
 
 
-class EvidenceGap(Strict):
+class EvidenceGap(Lenient):
     field_name: str = ""
     read_as: str = ""
     confidence: Confidence = 0.0
@@ -56,7 +85,7 @@ class TriageResult(Strict):
     suspicious_content: list[str] = []
 
 
-class DocumentRead(Strict):
+class DocumentRead(Lenient):
     doc_id: str
     doc_type: str = ""
     quality_score: Confidence = 0.0
@@ -89,7 +118,7 @@ class CoverageView(Strict):
     summary: str = ""
 
 
-class PanelFinding(Strict):
+class PanelFinding(Lenient):
     panel: str
     action: Literal["repair", "replace"] = "repair"
     paint: bool = False
@@ -110,7 +139,7 @@ class DamageAssessment(Strict):
     summary: str = ""
 
 
-class EstimateLine(Strict):
+class EstimateLine(Lenient):
     part: str
     action: str = "repair"
     part_price_eur: Eur = 0.0
@@ -148,7 +177,7 @@ class RepairabilityVerdict(Strict):
     summary: str = ""
 
 
-class RiskSignal(Strict):
+class RiskSignal(Lenient):
     signal_type: str
     detail: str
     weight: float = 0.0

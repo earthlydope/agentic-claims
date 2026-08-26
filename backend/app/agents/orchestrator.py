@@ -788,7 +788,7 @@ def _queue_from_signals(
 
     if claim.injury_reported:
         return (
-            "specialist", "injury_reported",
+            "injury", "injury_reported",
             "Injury reported — the claim is handled by the bodily-injury team.",
         )
     if risk_score > THRESHOLDS.max_fraud_score_for_autonomy:
@@ -803,14 +803,14 @@ def _queue_from_signals(
             "coverage", "coverage_uncertain_or_excluded",
             f"Coverage position is '{coverage_status}' — referred to a coverage adjuster.",
         )
-    if value > AUTHORITY_LIMITS_EUR["adjuster"]:
+    if value > AUTHORITY_LIMITS_EUR["claims_handler"]:
         return (
             "supervisor", "agent_requested_review",
             f"The agent asked for review on a claim valued at EUR {value:,.2f}, which is "
             "above adjuster authority.",
         )
     return (
-        "adjuster", "agent_requested_review",
+        "handler", "agent_requested_review",
         "The agent did not propose an autonomous outcome and asked for a person to decide.",
     )
 
@@ -854,15 +854,11 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
             "reason_detail": detail,
             "signing_agent": "HitlCoordinatorAgent",
             "failed_checks": [],
-            "authority_required": (
-                "supervisor" if queue == "supervisor"
-                else "siu" if queue == "siu"
-                else "adjuster"
-            ),
+            "authority_required": _authority_for_queue(queue),
         }
 
     if "PG-07" in failed:
-        queue, reason, detail = ("specialist", "injury_reported",
+        queue, reason, detail = ("injury", "injury_reported",
             "Injury reported — financial auto-adjudication stopped and referred to the "
             "bodily-injury team.")
     elif "PG-08" in failed:
@@ -877,17 +873,17 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
         queue, reason, detail = ("coverage", "adverse_decision_review",
             "An adverse outcome is never issued autonomously — a named person confirms it.")
     elif "PG-05" in failed:
-        queue, reason, detail = ("adjuster", "evidence_incomplete",
+        queue, reason, detail = ("handler", "evidence_incomplete",
             "Required evidence is incomplete for the decision proposed.")
     elif failed & {"PG-01", "PG-02", "PG-03"}:
-        queue = "supervisor" if value > AUTHORITY_LIMITS_EUR["adjuster"] else "adjuster"
+        queue = "supervisor" if value > AUTHORITY_LIMITS_EUR["claims_handler"] else "handler"
         reason = "ceiling_or_severity"
         detail = (
             f"EUR {value:,.2f} with severity '{enforced.get('severity')}' is outside the "
             f"autonomous limit of EUR {THRESHOLDS.auto_approval_ceiling_eur:,.2f}."
         )
     else:
-        queue, reason, detail = ("adjuster", "policy_guard_violation",
+        queue, reason, detail = ("handler", "policy_guard_violation",
             "One or more deterministic checks failed.")
 
     return {
@@ -897,12 +893,24 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
         "reason_detail": detail,
         "signing_agent": "HitlCoordinatorAgent",
         "failed_checks": sorted(failed),
-        "authority_required": (
-            "supervisor" if queue == "supervisor"
-            else "siu" if queue == "siu"
-            else "adjuster"
-        ),
+        "authority_required": _authority_for_queue(queue),
     }
+
+
+AUTHORITY_BY_QUEUE: dict[str, str] = {
+    "supervisor": "team_leader",
+    "injury": "team_leader",
+    "siu": "siu_investigator",
+    "assessment": "motor_assessor",
+    "handler": "claims_handler",
+    "coverage": "claims_handler",
+    "security": "compliance_officer",
+}
+
+
+def _authority_for_queue(queue: str | None) -> str:
+    """Which persona's authority a queue demands."""
+    return AUTHORITY_BY_QUEUE.get(queue or "", "claims_handler")
 
 
 def _action_for(

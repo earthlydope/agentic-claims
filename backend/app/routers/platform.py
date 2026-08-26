@@ -3,6 +3,7 @@ layer exposes, and the shape of the fifteen-step flow."""
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,7 +28,8 @@ from app.config import (
     model_mode,
 )
 from app.db import get_db
-from app.personas import CUSTOMERS, REPAIRERS, SCENARIOS, STAFF
+from app.claimants import CUSTOMERS, REPAIRERS, SCENARIOS
+from app.personas import PERSONAS, STAFF
 from app.semantic import knowledge, query_api
 from app.semantic.definitions import (
     LABOUR_RATES_EUR,
@@ -41,6 +43,64 @@ from app.zero_trust.semantic_gateway import PromptFirewall
 from app.zero_trust.write_gateway import ACTION_SCOPES
 
 router = APIRouter(prefix="/api", tags=["platform"])
+
+# The test document pack, served so it can be tried from the console without anyone
+# having to find it on disk first.
+TEST_DOCS = (
+    pathlib.Path(__file__).resolve().parent.parent.parent.parent / "test-documents"
+)
+
+DOC_PURPOSE: dict[str, str] = {
+    "01_Kostenvoranschlag_Donaustadt_clean.pdf":
+        "A clean repair quote, inside the ceiling. The straight-through path.",
+    "02_Polizeianzeige_LPD-ST-2026-118442.pdf":
+        "A police report naming a third party at fault. Opens the recovery path.",
+    "03_repair_quote_alpin_POISONED.pdf":
+        "A quote carrying a hidden instruction block, and an injury note. Both get caught.",
+    "04_Kostenvoranschlag_SKS_Nord_total_loss.pdf":
+        "Structural damage at 77 per cent of replacement value. The total-loss path.",
+    "05_photo_bumper_front_clear.jpg":
+        "A readable photo. Scores 0.98 and is accepted.",
+    "06_photo_tailgate_blurred.jpg":
+        "A soft, underexposed photo. Scores 0.34 and is escalated with a specific re-ask.",
+}
+
+
+@router.get("/test-documents")
+def test_documents() -> dict[str, Any]:
+    """The sample pack, so the upload path can be exercised in one click."""
+    if not TEST_DOCS.is_dir():
+        return {"available": False, "documents": [],
+                "note": "The test-documents directory is not present."}
+    rows = []
+    for path in sorted(TEST_DOCS.iterdir()):
+        if path.suffix.lower() not in (".pdf", ".jpg", ".jpeg", ".png"):
+            continue
+        rows.append({
+            "filename": path.name,
+            "size_bytes": path.stat().st_size,
+            "mime_type": "application/pdf" if path.suffix.lower() == ".pdf"
+            else "image/jpeg",
+            "purpose": DOC_PURPOSE.get(path.name, ""),
+            "url": f"/api/test-documents/{path.name}",
+        })
+    return {"available": True, "count": len(rows), "documents": rows}
+
+
+@router.get("/test-documents/{filename}")
+def test_document(filename: str):
+    """One file from the sample pack."""
+    from fastapi.responses import FileResponse
+
+    # Resolve inside the pack and refuse anything that escapes it.
+    target = (TEST_DOCS / filename).resolve()
+    if not str(target).startswith(str(TEST_DOCS.resolve())) or not target.is_file():
+        raise HTTPException(404, f"No test document '{filename}'.")
+    return FileResponse(
+        target,
+        media_type="application/pdf" if target.suffix.lower() == ".pdf" else "image/jpeg",
+        filename=target.name,
+    )
 
 
 @router.get("/health")
@@ -126,26 +186,6 @@ def agent_detail(key: str) -> dict[str, Any]:
              "docstring": (f.__doc__ or "").strip()}
             for f in TOOL_SCOPE[key]
         ],
-    }
-
-
-@router.get("/personas")
-def personas() -> dict[str, Any]:
-    return {
-        "customers": [
-            {
-                "party_id": c["party_id"],
-                "name": f"{c['first_name']} {c['last_name']}",
-                "city": c["city"], "region": c["region"], "language": c["language"],
-                "customer_since": c["customer_since"], "segment": c["segment"],
-                "persona_note": c["persona_note"],
-                "vehicle": c["vehicle"], "policy": c["policy"],
-            }
-            for c in CUSTOMERS
-        ],
-        "staff": STAFF,
-        "repairers": REPAIRERS,
-        "scenarios": SCENARIOS,
     }
 
 

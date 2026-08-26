@@ -503,3 +503,33 @@ def queues_for(key: str | None) -> tuple[str, ...]:
 
 
 AUTHORITY_BY_PERSONA: dict[str, float] = {p.key: p.authority_limit_eur for p in PERSONAS}
+
+
+# --------------------------------------------------------------------------
+# Compatibility surface for the code that speaks in "staff" terms.
+# --------------------------------------------------------------------------
+STAFF: list[dict[str, Any]] = [
+    {
+        "user_id": p.user_id,
+        "name": p.name,
+        "role": p.key,
+        "role_label": p.role_label,
+        "role_de": p.role_de,
+        "authority_limit_eur": p.authority_limit_eur,
+        "queues": list(p.queues),
+        "location": p.location,
+        "note": p.remit,
+        "initials": p.initials,
+        "accent": p.accent,
+    }
+    for p in PERSONAS
+    if p.kind == "staff"
+]
+
+
+def staff_by_id(user_id: str) -> dict[str, Any] | None:
+    return next((s for s in STAFF if s["user_id"] == user_id), None)
+
+
+# Settlement authority, keyed the way the write gateway asks for it.
+AUTHORITY_LIMITS_EUR: dict[str, float] = {p.key: p.authority_limit_eur for p in PERSONAS}

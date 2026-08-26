@@ -72,6 +72,12 @@ MODEL_RETRY_ATTEMPTS = int(os.environ.get("MODEL_RETRY_ATTEMPTS", "3"))
 # limiter keeps the platform inside it rather than discovering the limit through failures.
 MODEL_MAX_RPM = int(os.environ.get("MODEL_MAX_RPM", "15"))
 
+# OpenRouter's free models sit behind a pool shared across all of its users, so the
+# binding limit is upstream rather than per-key. The limiter keeps us polite; the retry
+# honours whatever `retry_after_seconds` the response carries.
+OPENROUTER_MAX_RPM = int(os.environ.get("OPENROUTER_MAX_RPM", "20"))
+XAI_MAX_RPM = int(os.environ.get("XAI_MAX_RPM", "60"))
+
 # What "auto" means. Hybrid is the default because it is the better architecture, not a
 # concession: a model earns its place where there is judgement to exercise, and an
 # itemised estimate over an approved catalogue has none. Set to "live" to put every agent
@@ -94,12 +100,116 @@ HYBRID_LIVE_AGENTS: tuple[str, ...] = (
 
 
 def live_model_available() -> bool:
-    """True when the agents can reach a real Gemini endpoint."""
-    return bool(GOOGLE_API_KEY) or bool(USE_VERTEX and GOOGLE_CLOUD_PROJECT)
+    """True when the agents can reach any real model endpoint."""
+    return (
+        bool(GOOGLE_API_KEY)
+        or bool(USE_VERTEX and GOOGLE_CLOUD_PROJECT)
+        or bool(os.environ.get("OPENROUTER_API_KEY", ""))
+        or bool(os.environ.get("XAI_API_KEY", ""))
+    )
+
+
+def resolve_model_name_for(tier: str) -> str:
+    """The model a tier resolves to, or the deterministic provider when there is none."""
+    if not live_model_available():
+        return "scripted-deterministic"
+    provider = resolve_provider()
+    if provider in ("openrouter", "xai"):
+        return model_for(provider, tier)
+    return MODEL_CAPABLE if tier == "capable" else MODEL_FAST
 
 
 def model_mode() -> str:
     return "live-gemini" if live_model_available() else "scripted-deterministic"
+
+
+# --- OpenRouter, as a second source ---------------------------------------
+# Two providers is not redundancy for its own sake: one project's quota is a single
+# ceiling, and a claims queue that stops when it is reached is a claims queue that stops.
+# Where both are configured the platform tries Gemini first and falls through to
+# OpenRouter on a quota refusal, so the run continues rather than failing.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.environ.get(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+)
+
+# Free OpenRouter models that actually hold up under tool calling *and* a typed output
+# contract — measured, not assumed. Several free models advertise tools and then fail the
+# schema, and several sit behind a shared upstream pool that refuses intermittently.
+OPENROUTER_MODEL_FAST = os.environ.get(
+    "OPENROUTER_MODEL_FAST", "dots-studio/dots-3-note-preview:free"
+)
+OPENROUTER_MODEL_CAPABLE = os.environ.get(
+    "OPENROUTER_MODEL_CAPABLE", "minimax/minimax-m3:free"
+)
+
+# --- xAI, as a third source -----------------------------------------------
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
+XAI_MODEL_FAST = os.environ.get("XAI_MODEL_FAST", "grok-4-fast-non-reasoning")
+XAI_MODEL_CAPABLE = os.environ.get("XAI_MODEL_CAPABLE", "grok-4-fast-reasoning")
+
+
+def xai_available() -> bool:
+    return bool(XAI_API_KEY)
+
+
+def xai_model_for(tier: str) -> str:
+    return XAI_MODEL_CAPABLE if tier == "capable" else XAI_MODEL_FAST
+
+
+# google | openrouter | xai | fallback | auto.
+# "fallback" chains every provider that is actually reachable, in preference order, so a
+# refusal on one continues on the next instead of ending the run.
+MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "auto").strip().lower()
+
+# Preference order for the fallback chain. Fastest and most reliable first — a chain is
+# only useful if its first leg is the one you actually want answering.
+PROVIDER_PREFERENCE: tuple[str, ...] = tuple(
+    p.strip() for p in os.environ.get(
+        "PROVIDER_PREFERENCE", "google,xai,openrouter"
+    ).split(",") if p.strip()
+)
+
+
+def openrouter_available() -> bool:
+    return bool(OPENROUTER_API_KEY)
+
+
+def google_available() -> bool:
+    return bool(GOOGLE_API_KEY) or bool(USE_VERTEX and GOOGLE_CLOUD_PROJECT)
+
+
+def configured_providers() -> tuple[str, ...]:
+    """Every provider a key has been supplied for, in preference order."""
+    have = {
+        "google": google_available(),
+        "openrouter": openrouter_available(),
+        "xai": xai_available(),
+    }
+    return tuple(p for p in PROVIDER_PREFERENCE if have.get(p))
+
+
+def resolve_provider() -> str:
+    """Which provider chain this deployment should use."""
+    if MODEL_PROVIDER in ("google", "openrouter", "xai", "fallback"):
+        return MODEL_PROVIDER
+    configured = configured_providers()
+    if len(configured) > 1:
+        return "fallback"
+    return configured[0] if configured else "google"
+
+
+def model_for(provider: str, tier: str) -> str:
+    """The model name a provider uses for a tier."""
+    if provider == "openrouter":
+        return openrouter_model_for(tier)
+    if provider == "xai":
+        return xai_model_for(tier)
+    return MODEL_CAPABLE if tier == "capable" else MODEL_FAST
+
+
+def openrouter_model_for(tier: str) -> str:
+    return OPENROUTER_MODEL_CAPABLE if tier == "capable" else OPENROUTER_MODEL_FAST
 
 
 # --- Autonomy thresholds (Pillar 1 policy guard) ---------------------------
@@ -123,11 +233,20 @@ class AutonomyThresholds:
 THRESHOLDS = AutonomyThresholds()
 
 # --- Human authority matrix ------------------------------------------------
+# Settlement authority by persona. A role with zero is not an oversight — an assessor
+# makes the technical call and an investigator works the network; neither decides the money.
 AUTHORITY_LIMITS_EUR = {
+    "policyholder": 0.0,
+    "claims_handler": 5_000.0,
+    "motor_assessor": 0.0,
+    "team_leader": 25_000.0,
+    "siu_investigator": 0.0,
+    "compliance_officer": 0.0,
+    # Older role names, kept so the gateway and the routing need no translation layer.
     "adjuster": 5_000.0,
     "supervisor": 25_000.0,
-    "siu": 0.0,        # investigates, never settles
-    "compliance": 0.0,  # read-only governance
+    "siu": 0.0,
+    "compliance": 0.0,
 }
 
 APPROVAL_TOKEN_TTL_SECONDS = int(os.environ.get("APPROVAL_TOKEN_TTL_SECONDS", "900"))
@@ -159,7 +278,7 @@ class RunBudgets:
     max_tokens: int = 250_000
     max_cost_eur: float = 1.50
     max_loops_per_agent: int = 3
-    wall_clock_seconds: float = 180.0
+    wall_clock_seconds: float = float(os.environ.get("RUN_WALL_CLOCK_SECONDS", "900"))
 
 
 BUDGETS = RunBudgets()
@@ -180,6 +299,19 @@ MODEL_PRICING_EUR_PER_MTOK = {
     # Scripted mode is priced at the fast-tier rate so the cost-per-claim metric is a
     # meaningful modelled figure rather than a flat zero. Surfaced as basis="modelled".
     "scripted-deterministic": {"in": 0.28, "out": 2.30},
+    # OpenRouter free tier costs nothing and reports cost: 0 on every response. Recorded
+    # as zero rather than modelled, because unlike the deterministic provider these are
+    # real calls that really were free.
+    "dots-studio/dots-3-note-preview:free": {"in": 0.0, "out": 0.0},
+    "minimax/minimax-m3:free": {"in": 0.0, "out": 0.0},
+    "nvidia/nemotron-3-super-120b-a12b:free": {"in": 0.0, "out": 0.0},
+    "z-ai/glm-5.2:free": {"in": 0.0, "out": 0.0},
+    "google/gemma-4-31b-it:free": {"in": 0.0, "out": 0.0},
+    # xAI list prices, EUR per million tokens (approximate conversion).
+    "grok-4-fast-non-reasoning": {"in": 0.19, "out": 0.46},
+    "grok-4-fast-reasoning": {"in": 0.19, "out": 0.46},
+    "grok-4": {"in": 2.80, "out": 13.90},
+    "grok-3-mini": {"in": 0.28, "out": 0.46},
 }
 
 COST_BASIS_NOTE = (
@@ -191,9 +323,16 @@ COST_BASIS_NOTE = (
 DB_PATH = os.environ.get("DB_PATH", "claims.db")
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
-CORS_ORIGINS = os.environ.get(
-    "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-).split(",")
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
+# Preview and production Vercel hosts. Set to empty to disable the regex.
+_cors_regex = os.environ.get("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app").strip()
+CORS_ORIGIN_REGEX: str | None = _cors_regex or None
 
 
 @dataclass

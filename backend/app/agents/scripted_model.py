@@ -373,12 +373,76 @@ def _synth_decision(results: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+
+def _synth_total_loss(results: dict[str, Any]) -> dict[str, Any]:
+    t = _d(results, "check_total_loss_threshold")
+    v = _d(results, "get_vehicle_valuation")
+    wording = _d(results, "search_policy_wording")
+    verdict = t.get("verdict") or "borderline"
+    return {
+        "verdict": verdict,
+        "repair_cost_eur": t.get("repair_cost_eur", 0.0),
+        "replacement_value_eur": t.get("replacement_value_eur", 0.0),
+        "ratio": t.get("ratio", 0.0),
+        "threshold": t.get("threshold", 0.70),
+        "residual_value_eur": t.get("residual_value_eur", 0.0),
+        "payable_on_total_loss_eur": t.get("payable_on_total_loss_eur", 0.0),
+        "citations": wording.get("citations") or [],
+        "reasoning": (
+            f"{t.get('basis', '')} "
+            + (
+                "The vehicle is a total loss: the indemnity is the replacement value less "
+                f"the salvage of EUR {t.get('residual_value_eur', 0.0):,.2f}."
+                if verdict == "total_loss"
+                else "The vehicle is economically repairable."
+                if verdict == "economically_repairable"
+                else "The ratio sits close to the threshold, so a person should confirm it."
+            )
+        ).strip(),
+        "summary": (
+            f"Repair EUR {t.get('repair_cost_eur', 0.0):,.2f} against replacement "
+            f"EUR {t.get('replacement_value_eur', 0.0):,.2f} "
+            f"({(t.get('ratio') or 0.0) * 100:.1f}%) — {verdict.replace('_', ' ')}."
+        ),
+    }
+
+
+def _synth_recovery(results: dict[str, Any]) -> dict[str, Any]:
+    r = _d(results, "assess_recovery")
+    return {
+        "recoverable": bool(r.get("recoverable")),
+        "basis": r.get("basis") or "unknown",
+        "recoverable_amount_eur": r.get("recoverable_amount_eur", 0.0),
+        "prospects": r.get("prospects") or "none",
+        "next_action": r.get("next_action") or "",
+        "reasoning": (
+            f"Liability sits with {(r.get('position') or {}).get('at_fault_party') or 'no identified third party'}. "
+            + (
+                f"EUR {r.get('recoverable_amount_eur', 0.0):,.2f} is recoverable including "
+                "the customer's excess."
+                if r.get("recoverable")
+                else "There is nothing worth pursuing, so the recovery is closed with the "
+                     "reason recorded."
+            )
+        ),
+        "summary": (
+            f"Recovery {r.get('prospects')} — "
+            f"EUR {r.get('recoverable_amount_eur', 0.0):,.2f} on a "
+            f"{(r.get('basis') or 'unknown').replace('_', ' ')} basis."
+        ),
+    }
+
+
 def _synth_hitl(results: dict[str, Any]) -> dict[str, Any]:
     task = _d(results, "create_review_task")
-    queue = _d(results, "get_queue_state")
+    ctx = maybe_run_context()
+    routing = (ctx.agent_outputs.get("_routing") if ctx else None) or {}
     return {
-        "task": task,
-        "queue_depth": len(queue) if isinstance(queue, list) else None,
+        "task_id": task.get("task_id") or "",
+        "queue": task.get("queue") or routing.get("queue") or "handler",
+        "authority_required": task.get("authority_required") or "",
+        "reason": routing.get("reason") or "",
         "summary": (
             f"Review task {task.get('task_id')} created on the {task.get('queue')} queue, "
             f"requiring {task.get('authority_required')} authority."
@@ -528,6 +592,15 @@ def _coverage_question(results: dict[str, Any]) -> dict[str, Any]:
     return {"question": q}
 
 
+def _total_loss_question(results: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "question": (
+            "When are repair costs treated as a total loss, and is the indemnity capped at "
+            "the replacement value?"
+        )
+    }
+
+
 def _hitl_args(results: dict[str, Any]) -> dict[str, Any]:
     ctx = maybe_run_context()
     outputs = ctx.agent_outputs if ctx else {}
@@ -581,7 +654,11 @@ PLANS: dict[str, list[ToolStep]] = {
     "damage_assessment": [("get_photo_findings", None)],
     "repair_estimate": [("get_labour_rate", None), ("calculate_repair_estimate", None)],
     "fraud_risk": [("get_risk_signals", None), ("graph_neighbours", None)],
+    "total_loss": [("get_vehicle_valuation", None),
+                   ("check_total_loss_threshold", None),
+                   ("search_policy_wording", _total_loss_question)],
     "decision": [("assemble_decision_inputs", None)],
+    "recovery": [("get_liability_position", None), ("assess_recovery", None)],
     "hitl_coordinator": [("create_review_task", _hitl_args), ("get_queue_state", None)],
     "customer_communication": [("get_template", _comms_args)],
 }
@@ -593,7 +670,9 @@ SYNTHESISERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "damage_assessment": _synth_damage,
     "repair_estimate": _synth_estimate,
     "fraud_risk": _synth_fraud,
+    "total_loss": _synth_total_loss,
     "decision": _synth_decision,
+    "recovery": _synth_recovery,
     "hitl_coordinator": _synth_hitl,
     "customer_communication": _synth_comms,
 }

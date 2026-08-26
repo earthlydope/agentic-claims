@@ -1,95 +1,126 @@
 @import "tailwindcss";
 
+/* ──────────────────────────────────────────────────────────────────────
+   Google AI Studio geometry — generous radii, near-white ground, thin
+   separation instead of boxes — on the Allianz palette.
+   ────────────────────────────────────────────────────────────────────── */
 @theme {
   /* Allianz brand blue and its working range */
   --color-az-900: #001b3f;
   --color-az-800: #002554;
   --color-az-700: #003781;   /* Allianz Blue */
   --color-az-600: #00479b;
-  --color-az-500: #0060b6;
-  --color-az-400: #2f86cf;
-  --color-az-300: #7cb6e4;
-  --color-az-200: #bcdaf3;
-  --color-az-100: #e4f0fa;
-  --color-az-50:  #f2f8fd;
+  --color-az-500: #1a63c4;
+  --color-az-400: #4a8ada;
+  --color-az-300: #8fb8e8;
+  --color-air: #e8f0fe;      /* the Google-blue wash used for active states */
+  --color-az-100: #eef3fb;
+  --color-az-50:  #f6f9fe;
 
-  /* Cool neutrals */
-  --color-ink-900: #14181f;
-  --color-ink-800: #1f2733;
-  --color-ink-700: #333d4d;
-  --color-ink-600: #4b5666;
-  --color-ink-500: #6b7688;
-  --color-ink-400: #98a2b3;
-  --color-ink-300: #c9d0da;
-  --color-ink-200: #e2e6ec;
-  --color-ink-100: #eef1f5;
-  --color-ink-50:  #f7f9fb;
+  /* Neutrals, warmed very slightly so white cards read as cards */
+  --color-ink-900: #1f1f1f;
+  --color-ink-800: #2c2f33;
+  --color-ink-700: #3c4043;
+  --color-ink-600: #5f6368;
+  --color-ink-500: #80868b;
+  --color-ink-400: #9aa0a6;
+  --color-ink-300: #c4c7c5;
+  --color-ink-200: #e1e3e1;
+  --color-ink-100: #ecedeb;
+  --color-ink-50:  #f8f9fa;
 
-  /* Semantic */
-  --color-ok-700: #05684f;
-  --color-ok-600: #06805f;
-  --color-ok-100: #e3f6ef;
-  --color-warn-700: #8a4b00;
-  --color-warn-600: #b06000;
-  --color-warn-100: #fdf1e2;
-  --color-stop-700: #96131c;
-  --color-stop-600: #c0202b;
-  --color-stop-100: #fdecec;
-  --color-info-700: #0b4f8a;
-  --color-info-100: #e6f2fb;
+  /* Semantic — Google's signal colours */
+  --color-ok-700: #0d652d;
+  --color-ok-600: #1e8e3e;
+  --color-ok-100: #e6f4ea;
+  --color-warn-700: #b06000;
+  --color-warn-600: #e8710a;
+  --color-warn-100: #fef7e0;
+  --color-stop-700: #b3261e;
+  --color-stop-600: #d93025;
+  --color-stop-100: #fce8e6;
+  --color-info-700: #185abc;
+  --color-info-100: #e8f0fe;
 
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Persona accents */
+  --color-teal-600: #00796b;
+  --color-teal-100: #e0f2f1;
+  --color-amber-600: #b26a00;
+  --color-amber-100: #fef3e0;
+  --color-indigo-600: #3f51b5;
+  --color-indigo-100: #e8eaf6;
+  --color-rose-600: #ad1457;
+  --color-rose-100: #fce4ec;
+  --color-slate-600: #455a64;
+  --color-slate-100: #eceff1;
 
-  --radius-card: 6px;
+  --font-sans: 'Google Sans Text', 'Google Sans', Inter, -apple-system,
+               BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Roboto Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
 * { box-sizing: border-box; }
-
 html, body, #root { height: 100%; }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background: var(--color-ink-50);
+  background: #fff;
   color: var(--color-ink-800);
   -webkit-font-smoothing: antialiased;
   font-size: 14px;
   line-height: 1.5;
 }
 
-/* Restrained scrollbars — the chrome should never compete with the data */
-::-webkit-scrollbar { width: 10px; height: 10px; }
+button { font-family: inherit; }
+
+/* Scrollbars stay out of the way */
+::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-ink-300);
-  border-radius: 6px;
-  border: 3px solid var(--color-ink-50);
+  background: var(--color-ink-200);
+  border-radius: 8px;
+  border: 4px solid #fff;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--color-ink-400); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-300); }
+
+/* Focus rings that read as Google's */
+:focus-visible {
+  outline: 2px solid var(--color-az-500);
+  outline-offset: 2px;
+}
 
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(3px); }
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
-.fade-up { animation: fade-up 220ms ease-out both; }
+.fade-up { animation: fade-up 240ms cubic-bezier(0.2, 0, 0, 1) both; }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-.pulse-dot { animation: pulse-dot 1.1s ease-in-out infinite; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
 
-@keyframes sweep {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(400%); }
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
 }
-.sweep::after {
-  content: '';
-  position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, var(--color-az-200), transparent);
-  width: 25%;
-  animation: sweep 1.4s ease-in-out infinite;
+.shimmer {
+  background: linear-gradient(90deg, var(--color-ink-100) 25%,
+              var(--color-ink-50) 50%, var(--color-ink-100) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
 }
+
+@keyframes typing {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+.typing-dot { animation: typing 1.1s ease-in-out infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
 
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* Elevation, Google-style: soft and low rather than a hard border */
+.elev-1 { box-shadow: 0 1px 2px 0 rgb(60 64 67 / 0.08), 0 1px 3px 1px rgb(60 64 67 / 0.06); }
+.elev-2 { box-shadow: 0 1px 3px 0 rgb(60 64 67 / 0.12), 0 4px 8px 3px rgb(60 64 67 / 0.08); }
+.elev-3 { box-shadow: 0 4px 8px 0 rgb(60 64 67 / 0.14), 0 8px 24px 4px rgb(60 64 67 / 0.1); }

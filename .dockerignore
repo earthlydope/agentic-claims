@@ -1,0 +1,13 @@
+.git
+.cursor
+frontend
+backend/.venv
+backend/claims.db
+backend/.env
+backend/.pytest_cache
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
+node_modules
+frontend/dist
+*.md

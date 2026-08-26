@@ -115,3 +115,106 @@ export interface Staff {
   location: string
   note: string
 }
+
+
+export interface PersonaFeature {
+  key: string
+  label: string
+  hint: string
+  icon: string
+  stages: string[]
+}
+
+export interface CoworkerTool {
+  name: string
+  label: string
+  description: string
+  risk_class: string
+}
+
+export interface Coworker {
+  name: string
+  tagline: string
+  remit: string
+  tools: CoworkerTool[]
+  starters: string[]
+  cannot: string[]
+}
+
+export interface Persona {
+  key: string
+  user_id: string
+  name: string
+  initials: string
+  role_label: string
+  role_de: string
+  kind: 'customer' | 'staff'
+  location: string
+  authority_limit_eur: number
+  queues: string[]
+  remit: string
+  measured_on: string[]
+  party_id: string | null
+  accent: string
+  features: PersonaFeature[]
+  coworker: Coworker
+}
+
+export interface Stage {
+  no: number
+  id: string
+  title: string
+  lane: string
+  owner: string
+  pillar: number | null
+  agent: string | null
+  summary: string
+  exceptions: string[]
+}
+
+export interface StatusMeta {
+  key: string
+  label: string
+  stage: string | null
+  tone: string
+  terminal: boolean
+  description: string
+}
+
+export interface WorkTask {
+  task_id: string
+  claim_reference: string
+  queue: string
+  reason: string
+  reason_detail: string
+  proposed_decision: string | null
+  proposed_amount_eur: number
+  authority_required: string
+  within_my_authority: boolean
+  priority: number
+  sla_due_at: string | null
+  sla_breached: boolean
+  age_minutes: number
+  policyholder: string
+  severity: string | null
+  structural: boolean
+  injury: boolean
+  status: StatusMeta
+}
+
+export interface CoworkerReply {
+  turn_id: string
+  conversation_id: string
+  blocked: boolean
+  coworker: string
+  answer: string
+  references?: string[]
+  suggested_actions?: string[]
+  needs_a_person?: boolean
+  tools_used?: string[]
+  model?: string
+  runtime?: string
+  latency_ms?: number
+  firewall?: Json
+  outbound_guard?: Json | null
+}

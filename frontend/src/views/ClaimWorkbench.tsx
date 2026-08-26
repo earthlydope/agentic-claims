@@ -18,8 +18,8 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 export function ClaimWorkbench({
-  reference, onBack,
-}: { reference: string; onBack: () => void }) {
+  reference, onBack, persona,
+}: { reference: string; onBack: () => void; persona?: { key: string; role_label: string } }) {
   const [detail, setDetail] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [steps, setSteps] = useState<Step[]>([])
@@ -28,7 +28,7 @@ export function ClaimWorkbench({
   const [tab, setTab] = useState<Tab>('run')
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const [runMode, setRunMode] = useState<string>('auto')
+  const [runtime, setRuntime] = useState<string>('pydantic-ai')
   const stopRef = useRef<(() => void) | null>(null)
   const feedRef = useRef<HTMLDivElement>(null)
 
@@ -42,8 +42,19 @@ export function ClaimWorkbench({
   useEffect(() => {
     load()
     api
-      .platform()
-      .then((p) => setSteps((p as { steps: Step[] }).steps))
+      .lifecycle()
+      .then((l) => {
+        const stages = (l as { stages: Json[] }).stages ?? []
+        setSteps(
+          stages.map((st) => ({
+            no: st.no as number,
+            id: st.id as string,
+            title: st.title as string,
+            lane: st.lane as string,
+            pillar: (st.pillar as number | null) ?? null,
+          })),
+        )
+      })
       .catch(() => undefined)
   }, [load])
 
@@ -74,7 +85,8 @@ export function ClaimWorkbench({
         setRunning(false)
       },
       'system',
-      runMode,
+      { runtime, mode: runtime === 'deterministic' ? 'deterministic' : 'live',
+        persona: persona?.key },
     )
   }
 
@@ -84,30 +96,38 @@ export function ClaimWorkbench({
   const stepState = useMemo(() => {
     const state: Record<string, { status: string; agent?: string | null; ms?: number }> = {}
     for (const ev of events) {
-      if (!ev.step_id) continue
-      const current = state[ev.step_id]
+      const stage = (ev as unknown as { stage_id?: string }).stage_id ?? ev.step_id
+      if (!stage) continue
+      const current = state[stage]
       if (ev.kind === 'step_start' || ev.kind === 'run_start') {
-        state[ev.step_id] = { status: 'running', agent: ev.agent }
+        state[stage] = { status: 'running', agent: ev.agent }
       } else if (ev.kind === 'step_end' || ev.kind === 'run_end') {
-        state[ev.step_id] = {
+        state[stage] = {
           status: ev.status === 'ok' ? 'done' : ev.status,
           agent: current?.agent ?? ev.agent,
           ms: ev.elapsed_ms,
         }
       } else if (['guard', 'preflight', 'sign', 'write'].includes(ev.kind)) {
-        state[ev.step_id] = {
+        state[stage] = {
           status: ev.status === 'ok' ? 'done' : ev.status,
           agent: ev.agent, ms: ev.elapsed_ms,
         }
       } else if (!current) {
-        state[ev.step_id] = { status: 'running', agent: ev.agent }
+        state[stage] = { status: 'running', agent: ev.agent }
       }
     }
     return state
   }, [events])
 
   const shownEvents = useMemo(
-    () => (selectedStep ? events.filter((e) => e.step_id === selectedStep) : events),
+    () =>
+      selectedStep
+        ? events.filter(
+            (e) =>
+              ((e as unknown as { stage_id?: string }).stage_id ?? e.step_id) ===
+              selectedStep,
+          )
+        : events,
     [events, selectedStep],
   )
 
@@ -146,17 +166,17 @@ export function ClaimWorkbench({
                 {claim.decision as string}
               </Badge>
             )}
-            <label className="flex items-center gap-1.5">
-              <span className="text-[11.5px] text-ink-500">Reasoning</span>
+            <label className="flex items-center gap-2">
+              <span className="text-[12px] text-ink-600">Runtime</span>
               <select
-                value={runMode}
-                onChange={(e) => setRunMode(e.target.value)}
+                value={runtime}
+                onChange={(e) => setRuntime(e.target.value)}
                 disabled={running}
-                title="Where the model reasons. Every control below the model is identical in all three."
-                className="border border-ink-300 rounded px-2 py-1.5 text-[12px] bg-white focus:outline-none focus:border-az-500 disabled:opacity-50"
+                title="Which runtime serves the reasoning turn. Every control below the model is identical in all three."
+                className="bg-white border border-ink-300 rounded-xl px-3 py-2 text-[12.5px] focus:outline-none focus:border-az-500 focus:ring-2 focus:ring-air disabled:opacity-50"
               >
-                <option value="auto">Hybrid (default)</option>
-                <option value="live">Every agent on Gemini</option>
+                <option value="pydantic-ai">Pydantic AI · typed</option>
+                <option value="google-adk">Google ADK</option>
                 <option value="deterministic">No model</option>
               </select>
             </label>
@@ -401,15 +421,29 @@ function RunConsole({
                 tone={(summary.security_events as number) > 0 ? 'warn' : 'ok'}
               />
               <Stat
-                label="Reasoning"
+                label="Runtime"
                 value={
-                  summary.model_mode === 'scripted-deterministic'
+                  summary.runtime === 'deterministic'
                     ? 'No model'
-                    : `${String((summary.live_agents as string[] | undefined)?.length ?? 0)}/9 on Gemini`
+                    : summary.runtime === 'pydantic-ai'
+                      ? 'Pydantic AI'
+                      : summary.runtime === 'google-adk'
+                        ? 'Google ADK'
+                        : String(summary.runtime ?? '—')
                 }
-                tone={summary.model_mode === 'scripted-deterministic' ? 'ghost' : 'ok'}
+                tone={summary.runtime === 'deterministic' ? 'ghost' : 'ok'}
                 mono={false}
-                sub={summary.model as string}
+                sub={
+                  <>
+                    {(summary.models_used as string[] | undefined)?.join(', ') ||
+                      (summary.model as string)}
+                    {(summary.throttle_wait_ms as number) > 0 && (
+                      <div className="text-ink-400">
+                        waited {ms(summary.throttle_wait_ms as number)} on quota
+                      </div>
+                    )}
+                  </>
+                }
               />
             </div>
             {guardEvent && (

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vercel": {
+      "url": "https://mcp.vercel.com"
+    },
+    "cloud-run": {
+      "command": "npx",
+      "args": ["-y", "https://github.com/GoogleCloudPlatform/cloud-run-mcp"]
+    }
+  }
+}

@@ -17,7 +17,12 @@ from typing import Any
 
 from google.adk.models import Gemini, LlmRequest, LlmResponse
 
-from app.config import MODEL_MAX_RPM, MODEL_RETRY_ATTEMPTS
+from app.config import (
+    MODEL_MAX_RPM,
+    MODEL_RETRY_ATTEMPTS,
+    OPENROUTER_MAX_RPM,
+    XAI_MAX_RPM,
+)
 
 _WINDOW_SECONDS = 60.0
 
@@ -59,21 +64,56 @@ class RateLimiter:
         }
 
 
-limiter = RateLimiter(MODEL_MAX_RPM)
+# One limiter per provider: two providers have two quotas, and sharing a limiter between
+# them would throttle the healthy one because the other is busy.
+LIMITERS: dict[str, RateLimiter] = {
+    "google": RateLimiter(MODEL_MAX_RPM),
+    "openrouter": RateLimiter(OPENROUTER_MAX_RPM),
+    "xai": RateLimiter(XAI_MAX_RPM),
+}
+
+# Kept as the default so existing call sites need no change.
+limiter = LIMITERS["google"]
+
+
+def limiter_for(provider: str) -> RateLimiter:
+    return LIMITERS.get(provider, LIMITERS["google"])
+
+
+def all_stats() -> dict[str, Any]:
+    return {name: lim.stats() for name, lim in LIMITERS.items()}
 
 _RETRY_DELAY = re.compile(r"retry in ([0-9.]+)s", re.IGNORECASE)
 _RETRY_INFO = re.compile(r"'retryDelay':\s*'([0-9.]+)s'")
+# OpenRouter reports the wait it wants in the error body rather than a header.
+_RETRY_AFTER_SECONDS = re.compile(r"'retry_after_seconds':\s*([0-9.]+)")
+_RETRY_AFTER_HEADER = re.compile(r"retry-after['\"]?\s*[:=]\s*['\"]?([0-9.]+)",
+                                 re.IGNORECASE)
 
 
 def is_quota_error(exc: BaseException) -> bool:
+    """A refusal we should wait out rather than treat as a failure.
+
+    Covers Gemini's ResourceExhausted and OpenRouter's upstream shared-pool 429, which is
+    a different thing wearing the same status code: the model is momentarily unavailable
+    to everybody, not to us specifically.
+    """
     text = f"{type(exc).__name__} {exc}".lower()
-    return "resourceexhausted" in text or "429" in text or "quota" in text
+    return (
+        "resourceexhausted" in text
+        or "429" in text
+        or "quota" in text
+        or "rate-limited" in text
+        or "rate limited" in text
+        or "upstream_429" in text
+        or "temporarily rate" in text
+    )
 
 
 def suggested_delay(exc: BaseException, default: float = 20.0) -> float:
     """Honour the delay the provider asked for, rather than guessing at one."""
     text = str(exc)
-    for pattern in (_RETRY_DELAY, _RETRY_INFO):
+    for pattern in (_RETRY_DELAY, _RETRY_INFO, _RETRY_AFTER_SECONDS, _RETRY_AFTER_HEADER):
         match = pattern.search(text)
         if match:
             try:

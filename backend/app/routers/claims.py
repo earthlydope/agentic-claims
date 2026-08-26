@@ -8,13 +8,13 @@ import json
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.orchestrator import run_claim
+from app.agents.graph import run_claim
 from app.db import SessionLocal, get_db
 from app.models import (
     Claim,
@@ -28,9 +28,10 @@ from app.models import (
     RiskSignal,
     Vehicle,
 )
-from app.personas import scenario_by_key
+from app.claimants import scenario_by_key
 from app.semantic import query_api
 from app.services.metrics import messages_for
+from app.services.ingest import ingest
 from app.services.preflight import preflight_upload, recovery_action, safe_link_check
 from app.zero_trust.semantic_gateway import PolicyAction, PromptFirewall, Surface
 
@@ -378,6 +379,178 @@ def intake(body: IntakeRequest, db: Session = Depends(get_db)) -> dict[str, Any]
     }
 
 
+MAX_FILES = 12
+MAX_TOTAL_BYTES = 40 * 1024 * 1024
+
+
+@router.post("/intake/upload")
+async def intake_upload(
+    policy_number: str = Form(...),
+    fnol_text: str = Form(...),
+    incident_date: str = Form(...),
+    incident_type: str = Form("parking_collision"),
+    incident_region: str = Form("Wien"),
+    incident_city: str = Form(""),
+    language: str = Form("de"),
+    channel: str = Form("web"),
+    injury_reported: bool = Form(False),
+    third_party_involved: bool = Form(False),
+    files: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """File a claim with real documents attached.
+
+    The order matters and is the point: the customer's words are screened before a model
+    could ever see them and before a claim record exists; every file is preflighted before
+    it is stored; and what is extracted carries its own confidence, so a value we are not
+    sure of is confirmed with the customer rather than promoted quietly.
+    """
+    policy = db.get(Policy, policy_number)
+    if policy is None:
+        raise HTTPException(404, f"Policy {policy_number} not found.")
+    if len(files) > MAX_FILES:
+        raise HTTPException(413, f"At most {MAX_FILES} files per notification.")
+
+    # Step 1 — the inbound firewall, before anything is written.
+    fw = PromptFirewall.inspect(fnol_text, Surface.USER_MESSAGE)
+    if fw.action is PolicyAction.BLOCK:
+        return {
+            "accepted": False,
+            "blocked_by": "semantic_gateway.prompt_firewall",
+            "firewall": fw.as_dict(),
+            "message": (
+                "This notification was stopped at the gateway before a model saw it and "
+                "before a claim record was created. No file was stored."
+            ),
+        }
+
+    # Step 2 — read and preflight each file.
+    seen: dict[str, str] = {}
+    total = 0
+    ingested: list[Any] = []
+    for upload_file in files:
+        payload = await upload_file.read()
+        total += len(payload)
+        if total > MAX_TOTAL_BYTES:
+            raise HTTPException(413, "Total upload size exceeds the limit.")
+        result = ingest(
+            upload_file.filename or "upload",
+            upload_file.content_type or "application/octet-stream",
+            payload,
+            known_hashes=seen,
+        )
+        seen[result.sha256] = result.filename
+        ingested.append(result)
+
+    accepted = [f for f in ingested if f.accepted]
+
+    # Anything the documents establish that the customer did not type.
+    detected_injury = injury_reported or any(
+        field["field_name"] == "injury_reported"
+        and str(field["extracted_value"]).lower() == "true"
+        for f in accepted for field in f.fields
+    )
+    police_ref = next(
+        (field["extracted_value"] for f in accepted for field in f.fields
+         if field["field_name"] == "police_report_ref"),
+        None,
+    )
+    third_party = third_party_involved or any(
+        field["field_name"] == "at_fault_party"
+        and str(field["extracted_value"]) == "third_party"
+        for f in accepted for field in f.fields
+    )
+
+    reference = f"AT-2026-{secrets.randbelow(899999) + 100000:06d}"
+    now = dt.datetime.now(dt.timezone.utc)
+
+    db.add(Claim(
+        reference=reference,
+        policy_number=policy.policy_number,
+        party_id=policy.party_id,
+        vin=policy.vin,
+        status="fnol_received",
+        stage="intake",
+        channel=channel,
+        language=language,
+        fnol_text=fnol_text,
+        incident_date=incident_date,
+        reported_at=now,
+        incident_city=incident_city or incident_region,
+        incident_region=incident_region,
+        incident_location=f"{incident_city or incident_region}, Austria",
+        incident_type=incident_type,
+        injury_reported=detected_injury,
+        third_party_involved=third_party,
+        police_report_ref=police_ref,
+        sla_due_at=now + dt.timedelta(hours=48),
+    ))
+
+    for index, f in enumerate(accepted, start=1):
+        doc_id = f"{reference}-DOC{index:02d}"
+        db.add(Document(
+            doc_id=doc_id,
+            claim_reference=reference,
+            kind=f.kind,
+            filename=f.filename,
+            mime_type=f.mime_type,
+            size_bytes=f.size_bytes,
+            page_count=f.page_count,
+            sha256=f.sha256,
+            doc_type=f.doc_type,
+            quality_score=f.quality_score,
+            # Stored verbatim. Whatever a file carries is preserved as evidence; it is
+            # stripped in transit on every read, not sanitised on the way in.
+            ocr_text=f.text or None,
+            detections=f.detections,
+            preflight_notes=f.notes,
+            duplicate_of=(f.preflight or {}).get("duplicate_of"),
+            uploaded_at=now + dt.timedelta(seconds=index),
+        ))
+        for field in f.fields:
+            db.add(ExtractedField(
+                doc_id=doc_id,
+                field_name=field["field_name"],
+                extracted_value=field["extracted_value"],
+                validated_value=field["validated_value"],
+                confidence=field["confidence"],
+                recovery_action=field["recovery_action"],
+                page=1,
+            ))
+    db.commit()
+
+    return {
+        "accepted": True,
+        "reference": reference,
+        "firewall": fw.as_dict(),
+        "files": [f.as_dict() for f in ingested],
+        "files_accepted": len(accepted),
+        "files_submitted": len(ingested),
+        "derived": {
+            "injury_reported": detected_injury,
+            "third_party_involved": third_party,
+            "police_report_ref": police_ref,
+            "panels": sorted({
+                d["panel"] for f in accepted for d in f.detections
+            }),
+            "structural": any(
+                d.get("structural") for f in accepted for d in f.detections
+            ),
+            "needs_confirming": [
+                {"file": f.filename, "field": field["field_name"],
+                 "read_as": field["extracted_value"], "confidence": field["confidence"]}
+                for f in accepted for field in f.fields
+                if field["recovery_action"] != "accept"
+            ],
+            "unreadable": [
+                {"file": f.filename, "quality": f.quality_score, "why": f.notes[:1]}
+                for f in accepted if f.quality_score < 0.55
+            ],
+        },
+        "next": f"/api/claims/{reference}/run",
+    }
+
+
 # --------------------------------------------------------------------------
 # Running a claim
 # --------------------------------------------------------------------------
@@ -386,14 +559,17 @@ async def run_sync(
     reference: str,
     user_id: str = "system",
     mode: str | None = None,
+    runtime: str | None = None,
+    persona: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Run the pipeline and return the whole trace at once.
 
-    `mode` is "live", "deterministic", or omitted to follow the environment.
+    `runtime` is "pydantic-ai", "google-adk" or "deterministic".
     """
     events: list[dict[str, Any]] = []
-    async for ev in run_claim(db, reference, user_id=user_id, mode=mode):
+    async for ev in run_claim(db, reference, user_id=user_id, mode=mode,
+                              runtime=runtime, persona=persona):
         events.append(ev)
     if not events:
         raise HTTPException(404, f"Claim {reference} not found.")
@@ -402,14 +578,16 @@ async def run_sync(
 
 @router.get("/{reference}/stream")
 async def run_stream(
-    reference: str, request: Request, user_id: str = "system", mode: str | None = None
+    reference: str, request: Request, user_id: str = "system", mode: str | None = None,
+    runtime: str | None = None, persona: str | None = None,
 ):
     """Stream the run as server-sent events, one per trace step."""
 
     async def generator():
         db = SessionLocal()
         try:
-            async for ev in run_claim(db, reference, user_id=user_id, mode=mode):
+            async for ev in run_claim(db, reference, user_id=user_id, mode=mode,
+                                      runtime=runtime, persona=persona):
                 if await request.is_disconnected():
                     break
                 yield {"event": ev.get("kind", "message"), "data": json.dumps(ev, default=str)}

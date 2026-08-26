@@ -1,6 +1,8 @@
 import type { Json, TraceEvent } from './types'
 
-const BASE = '/api'
+/** Cloud Run origin in production (`VITE_API_BASE`); Vite proxy `/api` locally. */
+const ROOT = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
+const BASE = ROOT ? `${ROOT}/api` : '/api'
 
 async function req<T = Json>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -30,6 +32,13 @@ export const api = {
   agents: () => get('/agents'),
   agent: (key: string) => get(`/agents/${key}`),
   personas: () => get('/personas'),
+  persona: (key: string) => get(`/personas/${key}`),
+  lifecycle: () => get('/lifecycle'),
+  work: (persona: string) => get(`/work?persona=${encodeURIComponent(persona)}`),
+  coworkerProfile: (persona: string) => get(`/coworker/${encodeURIComponent(persona)}`),
+  coworkerAsk: (persona: string, question: string, conversation_id?: string | null) =>
+    post('/coworker/ask', { persona, question, conversation_id: conversation_id ?? null }),
+  llmUsage: (days = 28) => get(`/llm-usage?days=${days}`),
   semantic: () => get('/semantic'),
   clauses: () => get('/semantic/clauses'),
   semanticSearch: (question: string, product?: string | null, language = 'en') =>
@@ -38,16 +47,47 @@ export const api = {
     post('/semantic/query', { query_name, args }),
   preflightLink: (url: string) => post('/preflight/link', { url }),
   reset: () => post('/admin/reset'),
+  testDocuments: () => get('/test-documents'),
+  /** Fetch one sample document as a File, ready to attach. */
+  fetchTestDocument: async (filename: string, mime: string) => {
+    const res = await fetch(`${BASE}/test-documents/${encodeURIComponent(filename)}`)
+    if (!res.ok) throw new Error(`Could not load ${filename} (${res.status})`)
+    return new File([await res.blob()], filename, { type: mime })
+  },
 
   claims: (liveOnly = false) =>
     get(`/claims${liveOnly ? '?live_only=true' : ''}`),
   claim: (ref: string) => get(`/claims/${ref}`),
   intake: (body: Json) => post('/claims/intake', body),
-  runClaim: (ref: string, userId = 'system', mode?: string) =>
-    post(
-      `/claims/${ref}/run?user_id=${encodeURIComponent(userId)}` +
-        (mode ? `&mode=${encodeURIComponent(mode)}` : ''),
-    ),
+  /** File a claim with real documents attached. */
+  intakeUpload: async (form: FormData) => {
+    const res = await fetch(`${BASE}/claims/intake/upload`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const body = await res.json()
+        detail = body.detail ?? JSON.stringify(body)
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(`${res.status} ${detail}`)
+    }
+    return res.json() as Promise<Json>
+  },
+  runClaim: (
+    ref: string,
+    userId = 'system',
+    opts: { mode?: string; runtime?: string; persona?: string } = {},
+  ) => {
+    const q = new URLSearchParams({ user_id: userId })
+    if (opts.mode) q.set('mode', opts.mode)
+    if (opts.runtime) q.set('runtime', opts.runtime)
+    if (opts.persona) q.set('persona', opts.persona)
+    return post(`/claims/${ref}/run?${q.toString()}`)
+  },
 
   reviewQueue: (queue?: string) =>
     get(`/review/queue${queue ? `?queue=${encodeURIComponent(queue)}` : ''}`),
@@ -91,12 +131,13 @@ export function streamRun(
   onDone: () => void,
   onError: (message: string) => void,
   userId = 'system',
-  mode?: string,
+  opts: { mode?: string; runtime?: string; persona?: string } = {},
 ): () => void {
-  const source = new EventSource(
-    `${BASE}/claims/${reference}/stream?user_id=${encodeURIComponent(userId)}` +
-      (mode ? `&mode=${encodeURIComponent(mode)}` : ''),
-  )
+  const q = new URLSearchParams({ user_id: userId })
+  if (opts.mode) q.set('mode', opts.mode)
+  if (opts.runtime) q.set('runtime', opts.runtime)
+  if (opts.persona) q.set('persona', opts.persona)
+  const source = new EventSource(`${BASE}/claims/${reference}/stream?${q.toString()}`)
   let finished = false
 
   const handle = (raw: MessageEvent) => {

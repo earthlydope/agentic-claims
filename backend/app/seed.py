@@ -32,7 +32,7 @@ from app.models import (
     RiskSignal,
     Vehicle,
 )
-from app.personas import BACKGROUND_PARTIES, CUSTOMERS, REPAIRERS
+from app.claimants import BACKGROUND_PARTIES, CUSTOMERS, REPAIRERS
 
 NOW = dt.datetime.now(dt.timezone.utc)
 

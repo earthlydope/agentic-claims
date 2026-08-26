@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.orchestrator import run_claim
+from app.agents.graph import run_claim
 from app.models import Claim
 
 GOLDEN_CASES: list[dict[str, Any]] = [
@@ -28,7 +28,8 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "expect_tools": ["get_claim_360", "get_extractions", "get_policy_coverage",
                          "search_policy_wording", "get_photo_findings",
                          "calculate_repair_estimate", "get_risk_signals",
-                         "assemble_decision_inputs", "get_template"],
+                         "assemble_decision_inputs", "get_template",
+                         "check_total_loss_threshold", "assess_recovery"],
         "expect_settlement_eur": 1_142.30,
     },
     {
@@ -71,7 +72,7 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "reference": "AT-2026-004421",
         "name": "Injury stop, and a poisoned document stripped",
         "expect_decision": "Review Required",
-        "expect_queue": "specialist",
+        "expect_queue": "injury",
         "expect_failed_checks": ["PG-07"],
         "expect_grounded": True,
         "expect_straight_through": False,
@@ -90,7 +91,9 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
         tools_called: list[str] = []
         security_events = 0
 
-        async for ev in run_claim(db, case["reference"], trigger="evaluation", mode=mode):
+        async for ev in run_claim(db, case["reference"], trigger="evaluation", mode=mode,
+                                  runtime=("deterministic" if mode == "deterministic"
+                                           else None)):
             if ev.get("kind") == "tool_call":
                 tools_called.append((ev.get("data") or {}).get("tool") or "")
             if ev.get("kind") == "security":
