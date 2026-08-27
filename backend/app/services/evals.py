@@ -36,7 +36,7 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "reference": "AT-2026-004418",
         "name": "Ceiling and severity both block autonomy",
         "expect_decision": "Review Required",
-        "expect_queue": "supervisor",
+        "expect_queue": "operations",
         "expect_failed_checks": ["PG-01", "PG-02"],
         "expect_grounded": True,
         "expect_straight_through": False,
@@ -56,7 +56,7 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "expect_grounded": True,
         "expect_straight_through": False,
         "expect_tools": ["search_policy_wording", "create_review_task"],
-        "expect_clause": "AKB-§7.2",
+        "expect_clause": "AKHB Art 8.2",
     },
     {
         "reference": "AT-2026-004420",

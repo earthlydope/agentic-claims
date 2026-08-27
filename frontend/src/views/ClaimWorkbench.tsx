@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, streamRun } from '../api'
 import {
-  Badge, Button, Card, CheckRow, decisionTone, Dot, Empty, ErrorNote, Field,
+  Badge, Card, CheckRow, CopyButton, decisionTone, Dot, Empty, ErrorNote, Field,
   JsonBlock, KeyValueGrid, Meter, Mono, PageHeader, PillarChip, Spinner, Stat,
   statusTone, Table, Tabs, Td,
 } from '../components/ui'
+import { StageResults } from '../components/StageResults'
+import { useEnum, useT } from '../lib/i18n'
 import { eur, ms, num, shortHash, when } from '../lib/format'
 import type { Json, Step, TraceEvent } from '../types'
 
-type Tab = 'run' | 'evidence' | 'assessment' | 'decision' | 'customer' | 'ledger'
+type Tab = 'results' | 'run' | 'evidence' | 'assessment' | 'decision' | 'customer' | 'ledger'
 
 const KIND_LABEL: Record<string, string> = {
   run_start: 'run started', guard: 'policy control', preflight: 'evidence preflight',
@@ -20,22 +22,31 @@ const KIND_LABEL: Record<string, string> = {
 export function ClaimWorkbench({
   reference, onBack, persona,
 }: { reference: string; onBack: () => void; persona?: { key: string; role_label: string } }) {
+  const t = useT()
+  const label = useEnum()
   const [detail, setDetail] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [steps, setSteps] = useState<Step[]>([])
   const [events, setEvents] = useState<TraceEvent[]>([])
   const [running, setRunning] = useState(false)
-  const [tab, setTab] = useState<Tab>('run')
+  const [tab, setTab] = useState<Tab>('results')
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const [runtime, setRuntime] = useState<string>('pydantic-ai')
+  const started = useRef(false)
   const stopRef = useRef<(() => void) | null>(null)
   const feedRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(() => {
     api
       .claim(reference)
-      .then(setDetail)
+      .then((d) => {
+        setDetail(d)
+        // A claim that was already worked carries its trace. Seed the feed from it, so
+        // opening a file shows what was found rather than an empty panel — but never
+        // over a live stream that is already producing events.
+        const recorded = ((d as Json).trace ?? []) as TraceEvent[]
+        setEvents((prev) => (prev.length ? prev : recorded))
+      })
       .catch((e: Error) => setError(e.message))
   }, [reference])
 
@@ -67,12 +78,11 @@ export function ClaimWorkbench({
     }
   }, [events, running])
 
-  const start = () => {
+  const start = useCallback(() => {
     setEvents([])
     setExpanded(new Set())
     setSelectedStep(null)
     setRunning(true)
-    setTab('run')
     stopRef.current = streamRun(
       reference,
       (ev) => setEvents((prev) => [...prev, ev]),
@@ -85,10 +95,26 @@ export function ClaimWorkbench({
         setRunning(false)
       },
       'system',
-      { runtime, mode: runtime === 'deterministic' ? 'deterministic' : 'live',
-        persona: persona?.key },
+      { persona: persona?.key },
     )
-  }
+  }, [reference, load, persona?.key])
+
+  /**
+   * A file nobody has worked yet works itself when it is opened.
+   *
+   * Opening a claim is the signal that somebody wants to know where it stands, and making
+   * them press something first is the step this platform exists to remove. It runs once per
+   * mounted file — `started` guards against React re-invoking the effect — and only where
+   * nothing has been recorded against the claim before.
+   */
+  useEffect(() => {
+    if (started.current || !detail) return
+    const worked = ((detail.trace as Json[] | undefined)?.length ?? 0) > 0
+      || Boolean((detail.claim as Json | undefined)?.decision)
+    if (worked) return
+    started.current = true
+    start()
+  }, [detail, start])
 
   const runEnd = events.find((e) => e.kind === 'run_end')
   const guardEvent = [...events].reverse().find((e) => e.step_id === 'policy.guard' && e.kind === 'guard')
@@ -151,7 +177,7 @@ export function ClaimWorkbench({
         eyebrow={
           <>
             <button type="button" onClick={onBack} className="hover:underline">
-              Claims
+              {t('cw2.back')}
             </button>
             {' / '}
             {claim.reference as string}
@@ -163,26 +189,18 @@ export function ClaimWorkbench({
           <div className="flex items-center gap-2.5">
             {claim.decision && (
               <Badge tone={decisionTone(claim.decision as string)}>
-                {claim.decision as string}
+                {label(claim.decision as string)}
               </Badge>
             )}
-            <label className="flex items-center gap-2">
-              <span className="text-[12px] text-ink-600">Runtime</span>
-              <select
-                value={runtime}
-                onChange={(e) => setRuntime(e.target.value)}
-                disabled={running}
-                title="Which runtime serves the reasoning turn. Every control below the model is identical in all three."
-                className="bg-white border border-ink-300 rounded-xl px-3 py-2 text-[12.5px] focus:outline-none focus:border-az-500 focus:ring-2 focus:ring-air disabled:opacity-50"
-              >
-                <option value="pydantic-ai">Pydantic AI · typed</option>
-                <option value="google-adk">Google ADK</option>
-                <option value="deterministic">No model</option>
-              </select>
-            </label>
-            <Button onClick={start} busy={running}>
-              {running ? 'Running…' : events.length ? 'Run again' : 'Run the agents'}
-            </Button>
+            {/* Nothing to press. The analysis starts on notification; this only says
+                whether it is still going. */}
+            {running && (
+              <span className="flex items-center gap-2 text-[12.5px] text-az-700">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-az-500
+                                 border-t-transparent rounded-full animate-spin" />
+                {t('cw2.working')}
+              </span>
+            )}
           </div>
         }
       />
@@ -196,31 +214,31 @@ export function ClaimWorkbench({
       {/* Claim identity */}
       <Card className="mb-5" dense>
         <KeyValueGrid cols={6}>
-          <Field label="Policyholder">
+          <Field label={t('cw2.policyholder')}>
             {claim.policyholder?.name}
             <div className="text-[11px] text-ink-500">
               {claim.policyholder?.city}, {claim.policyholder?.region} ·{' '}
               {(claim.language as string).toUpperCase()}
             </div>
           </Field>
-          <Field label="Policy">
+          <Field label={t('cw2.policy')}>
             {claim.policy?.product}
             <div className="text-[11px] text-ink-500 font-mono">
               {claim.policy?.policy_number}
             </div>
           </Field>
-          <Field label="Vehicle">
+          <Field label={t('cw2.vehicle')}>
             {claim.vehicle?.make} {claim.vehicle?.model}
             <div className="text-[11px] text-ink-500 font-mono">
               {claim.vehicle?.plate} · {claim.vehicle?.year}
             </div>
           </Field>
-          <Field label="Excess">{eur(claim.policy?.excess_eur)}</Field>
-          <Field label="Reported">
+          <Field label={t('cw2.excess')}>{eur(claim.policy?.excess_eur)}</Field>
+          <Field label={t('cw2.reported')}>
             {when(claim.reported_at as string)}
             <div className="text-[11px] text-ink-500">via {claim.channel as string}</div>
           </Field>
-          <Field label="Flags">
+          <Field label={t('cw2.flags')}>
             <div className="flex flex-wrap gap-1">
               {claim.injury_reported ? <Badge tone="stop">injury</Badge> : null}
               {claim.structural_damage ? <Badge tone="warn">structural</Badge> : null}
@@ -240,7 +258,7 @@ export function ClaimWorkbench({
         {claim.fnol_text ? (
           <div className="mt-4 pt-4 border-t border-ink-100">
             <div className="text-[11px] font-medium uppercase tracking-[0.055em] text-ink-500 mb-1.5">
-              What the customer wrote
+              {t('cw2.customerWrote')}
             </div>
             <p className="text-[13px] text-ink-700 leading-relaxed max-w-4xl italic">
               “{claim.fnol_text as string}”
@@ -252,17 +270,36 @@ export function ClaimWorkbench({
       <div className="border-b border-ink-200 mb-5">
         <Tabs
           tabs={[
-            { id: 'run' as Tab, label: 'Run console', count: events.length || undefined },
-            { id: 'evidence' as Tab, label: 'Evidence', count: persisted.documents.length },
-            { id: 'assessment' as Tab, label: 'Assessment' },
-            { id: 'decision' as Tab, label: 'Decision & guard' },
-            { id: 'customer' as Tab, label: 'Customer', count: persisted.messages.length },
-            { id: 'ledger' as Tab, label: 'Audit trail' },
+            { id: 'results' as Tab, label: t('cw2.tabResults') },
+            { id: 'run' as Tab, label: t('cw2.tabRun'), count: events.length || undefined },
+            { id: 'evidence' as Tab, label: t('cw2.tabEvidence'), count: persisted.documents.length },
+            { id: 'assessment' as Tab, label: t('cw2.tabAssessment') },
+            { id: 'decision' as Tab, label: t('cw2.tabDecision') },
+            { id: 'customer' as Tab, label: t('cw2.tabCustomer'), count: persisted.messages.length },
+            { id: 'ledger' as Tab, label: t('cw2.tabLedger') },
           ]}
           active={tab}
           onChange={setTab}
         />
       </div>
+
+      {tab === 'results' && (
+        events.length === 0 ? (
+          <Card>
+            <Empty>
+              {running
+                ? t('cw2.readingNow')
+                : t('cw2.nothingAssessed')}
+            </Empty>
+          </Card>
+        ) : (
+          <StageResults
+            events={events}
+            reference={reference}
+            persona={persona?.key ?? 'claim_handler'}
+          />
+        )
+      )}
 
       {tab === 'run' && (
         <RunConsole
@@ -284,7 +321,6 @@ export function ClaimWorkbench({
             })
           }
           feedRef={feedRef}
-          onStart={start}
         />
       )}
 
@@ -312,7 +348,7 @@ export function ClaimWorkbench({
 
 function RunConsole({
   steps, stepState, events, allEvents, running, runEnd, guardEvent, selectedStep,
-  onSelectStep, expanded, onToggle, feedRef, onStart,
+  onSelectStep, expanded, onToggle, feedRef,
 }: {
   steps: Step[]
   stepState: Record<string, { status: string; agent?: string | null; ms?: number }>
@@ -326,8 +362,8 @@ function RunConsole({
   expanded: Set<number>
   onToggle: (seq: number) => void
   feedRef: React.RefObject<HTMLDivElement | null>
-  onStart: () => void
 }) {
+  const t = useT()
   const summary = runEnd?.data?.summary as Json | undefined
   const lanes: Record<string, { label: string; tone: string }> = {
     customer: { label: 'Customer', tone: 'text-az-600' },
@@ -421,25 +457,17 @@ function RunConsole({
                 tone={(summary.security_events as number) > 0 ? 'warn' : 'ok'}
               />
               <Stat
-                label="Runtime"
+                label="Served by"
                 value={
-                  summary.runtime === 'deterministic'
-                    ? 'No model'
-                    : summary.runtime === 'pydantic-ai'
-                      ? 'Pydantic AI'
-                      : summary.runtime === 'google-adk'
-                        ? 'Google ADK'
-                        : String(summary.runtime ?? '—')
+                  summary.runtime === 'deterministic' ? 'Rules only' : 'Assistant'
                 }
                 tone={summary.runtime === 'deterministic' ? 'ghost' : 'ok'}
                 mono={false}
                 sub={
                   <>
-                    {(summary.models_used as string[] | undefined)?.join(', ') ||
-                      (summary.model as string)}
                     {(summary.throttle_wait_ms as number) > 0 && (
                       <div className="text-ink-400">
-                        waited {ms(summary.throttle_wait_ms as number)} on quota
+                        waited {ms(summary.throttle_wait_ms as number)} on capacity
                       </div>
                     )}
                   </>
@@ -498,14 +526,11 @@ function RunConsole({
           {allEvents.length === 0 ? (
             <div className="p-8 text-center">
               <p className="text-[13px] text-ink-600 mb-1">
-                Nothing has run on this claim yet.
+                {t('cw2.notWorked')}
               </p>
-              <p className="text-[12px] text-ink-500 mb-4 max-w-md mx-auto">
-                Running the agents streams every step live: the inbound firewall, the
-                document read, the four parallel assessments, the deterministic guard,
-                the signature and the single write.
+              <p className="text-[12px] text-ink-500 max-w-md mx-auto">
+                {t('cw2.startsOnOwn')}
               </p>
-              <Button onClick={onStart}>Run the agents</Button>
             </div>
           ) : (
             <div ref={feedRef} className="max-h-[560px] overflow-y-auto">
@@ -982,7 +1007,7 @@ function AssessmentPanel({
     ?.data?.result as Json | undefined
 
   if (!coverage && !estimate) {
-    return <Empty>Run the agents to produce a coverage view, an estimate and a risk picture.</Empty>
+    return <Empty>Nothing has been assessed on this claim yet.</Empty>
   }
 
   return (
@@ -1224,7 +1249,7 @@ function DecisionPanel({
   guardEvent, runEnd, tasks,
 }: { guardEvent?: TraceEvent; runEnd?: TraceEvent; tasks: Json[] }) {
   if (!guardEvent) {
-    return <Empty>Run the agents to see the deterministic policy guard evaluate the package.</Empty>
+    return <Empty>No decision has reached the policy checks on this claim yet.</Empty>
   }
   const g = guardEvent.data.guard as Json
   const routing = runEnd?.data?.routing as Json | undefined
@@ -1359,13 +1384,14 @@ function CustomerPanel({ messages, timeline }: { messages: Json[]; timeline: Jso
               <div key={m.message_id as string}>
                 <div className="flex items-center gap-2 mb-2.5 flex-wrap">
                   <Badge tone={m.status === 'drafted' ? 'ok' : 'stop'}>{m.status as string}</Badge>
-                  <Badge tone="ghost" mono>
-                    {m.template_id as string}
-                  </Badge>
                   <Badge tone="ghost">{(m.language as string).toUpperCase()}</Badge>
                   <span className="text-[11px] text-ink-400 ml-auto">
                     {when(m.created_at as string)}
                   </span>
+                  {/* The whole message, subject line included, ready to paste. */}
+                  <CopyButton
+                    text={`${m.subject as string}\n\n${m.body as string}`}
+                  />
                 </div>
                 <div className="border border-ink-200 rounded bg-ink-50/60 p-4">
                   <div className="text-[13px] font-semibold text-ink-900 mb-2.5">

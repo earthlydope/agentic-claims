@@ -4,36 +4,17 @@ import {
   Avatar, Button, Card, Chip, Empty, ErrorNote, Field, KeyValueGrid, Meter, Mono,
   Notice, PageHeader, Spinner, Stat, toneOf,
 } from '../components/ui'
-import { eur, num, when } from '../lib/format'
+import { useBilingual, useEnum, useMoney, useReasonDetail, useT } from '../lib/i18n'
+import { num, when } from '../lib/format'
 import type { Json, Persona, WorkTask } from '../types'
 
-/** One queue view, framed for whoever is looking at it. */
+/** One queue view, framed for whoever is looking at it. Keys, so it follows the language. */
 const FRAMING: Record<string, { title: string; lede: string; empty: string }> = {
-  work_queue: {
-    title: 'My desk',
-    lede: 'Claims the platform could not finish on its own. Each one says which check stopped it, so you are not guessing why it arrived.',
-    empty: 'Nothing on your desk. Every claim the platform could finish, it finished.',
-  },
-  assessment_queue: {
-    title: 'Assessments',
-    lede: 'Damage, estimates and the repairability call. You own the technical position; the settlement is somebody else’s.',
-    empty: 'No assessments waiting. Nothing has needed a technical opinion.',
-  },
-  approvals: {
-    title: 'Approvals',
-    lede: 'Decisions above handler authority. The agent’s recommendation is preserved next to what the guard did with it.',
-    empty: 'Nothing waiting on your approval.',
-  },
-  investigations: {
-    title: 'Investigations',
-    lede: 'Referrals from handlers and from the platform’s own signals. Signals, not findings — the claim is frozen, not declined.',
-    empty: 'No referrals open.',
-  },
-  recovery: {
-    title: 'Recovery',
-    lede: 'Settled claims where a third party may owe us — including the excess your customer is out of pocket for.',
-    empty: 'Nothing to recover on at the moment.',
-  },
+  work_queue:       { title: 'wq.myDesk',    lede: 'wq.myDeskLede',    empty: 'wq.myDeskEmpty' },
+  assessment_queue: { title: 'wq.assess',    lede: 'wq.assessLede',    empty: 'wq.assessEmpty' },
+  approvals:        { title: 'wq.approvals', lede: 'wq.approvalsLede', empty: 'wq.approvalsEmpty' },
+  investigations:   { title: 'wq.siu',       lede: 'wq.siuLede',       empty: 'wq.siuEmpty' },
+  recovery:         { title: 'wq.recovery',  lede: 'wq.recoveryLede',  empty: 'wq.recoveryEmpty' },
 }
 
 export function WorkQueue({
@@ -44,6 +25,10 @@ export function WorkQueue({
   onOpenClaim: (ref: string) => void
   refreshKey: number
 }) {
+  const t = useT()
+  const eur = useMoney()
+  const say = useBilingual()
+  const label = useEnum()
   const [data, setData] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -85,17 +70,17 @@ export function WorkQueue({
             <span className="italic">{persona.role_de}</span>
           </span>
         }
-        title={frame.title}
-        lede={frame.lede}
+        title={t(frame.title)}
+        lede={t(frame.lede)}
         right={
           <>
             <Chip tone="ghost">
               {persona.authority_limit_eur > 0
-                ? `Authority ${eur(persona.authority_limit_eur, 0)}`
+                ? `${t('wq.authority')} ${eur(persona.authority_limit_eur, 0)}`
                 : 'No settlement authority'}
             </Chip>
             <Button variant="secondary" size="sm" onClick={load}>
-              Refresh
+              {t('wq.refresh')}
             </Button>
           </>
         }
@@ -103,30 +88,30 @@ export function WorkQueue({
 
       <div className="grid grid-cols-4 gap-4 mb-5">
         <Card dense>
-          <Stat label="Open" value={num(data.open as number)} tone={tasks.length ? 'warn' : 'ok'} />
+          <Stat label={t('wq.open')} value={num(data.open as number)} tone={tasks.length ? 'warn' : 'ok'} />
         </Card>
         <Card dense>
           <Stat
-            label="Value at stake"
+            label={t('wq.valueAtStake')}
             value={eur(data.value_at_stake_eur as number, 0)}
             tone="blue"
           />
         </Card>
         <Card dense>
           <Stat
-            label="Past SLA"
+            label={t('wq.pastSla')}
             value={num(data.sla_breached as number)}
             tone={(data.sla_breached as number) > 0 ? 'stop' : 'ok'}
           />
         </Card>
         <Card dense>
           <Stat
-            label="Within my authority"
+            label={t('wq.withinAuth')}
             value={num(tasks.filter((t) => t.within_my_authority).length)}
             sub={
               persona.authority_limit_eur > 0
-                ? `of ${tasks.length} waiting`
-                : 'this role does not settle'
+                ? t('wq.ofWaiting').replace('{n}', String(tasks.length))
+                : t('wq.noAuthority')
             }
           />
         </Card>
@@ -134,40 +119,42 @@ export function WorkQueue({
 
       {tasks.length === 0 ? (
         <Card>
-          <Empty>{frame.empty}</Empty>
+          <Empty>{t(frame.empty)}</Empty>
         </Card>
       ) : (
         <div className="grid grid-cols-[minmax(340px,380px)_1fr] gap-5 items-start">
-          <Card title="Prioritised" subtitle="Value, SLA, risk, failed automation" pad={false}>
+          <Card title={t('wq.prioritised')} subtitle={t('wq.prioritisedBy')} pad={false}>
             <div className="pb-2 max-h-[620px] overflow-y-auto">
-              {tasks.map((t) => (
+              {tasks.map((task) => (
                 <button
-                  key={t.task_id}
+                  key={task.task_id}
                   type="button"
-                  onClick={() => setSelected(t.task_id)}
+                  onClick={() => setSelected(task.task_id)}
                   className={`w-full text-left px-4 py-3.5 border-l-[3px] transition-colors ${
-                    selected === t.task_id
+                    selected === task.task_id
                       ? 'border-az-700 bg-air/60'
                       : 'border-transparent hover:bg-ink-50'
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Mono className="text-ink-900">{t.claim_reference}</Mono>
-                    <Chip tone={toneOf(t.status?.tone)}>{t.status?.label}</Chip>
-                    {t.sla_breached && <Chip tone="stop">past SLA</Chip>}
+                    <Mono className="text-ink-900">{task.claim_reference}</Mono>
+                    <Chip tone={toneOf(task.status?.tone)}>{say(task.status, 'label')}</Chip>
+                    {task.sla_breached && (
+                      <Chip tone="stop">{t('wq.pastSla')}</Chip>
+                    )}
                   </div>
                   <div className="text-[13px] text-ink-800 mt-1.5">
-                    {t.reason.replace(/_/g, ' ')}
+                    {label(task.reason)}
                   </div>
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-[11.5px] text-ink-500">{t.policyholder}</span>
+                    <span className="text-[11.5px] text-ink-500">{task.policyholder}</span>
                     <span className="text-[13px] tabular text-ink-900">
-                      {t.proposed_amount_eur > 0 ? eur(t.proposed_amount_eur) : '—'}
+                      {task.proposed_amount_eur > 0 ? eur(task.proposed_amount_eur) : '—'}
                     </span>
                   </div>
-                  {!t.within_my_authority && t.proposed_amount_eur > 0 && (
+                  {!task.within_my_authority && task.proposed_amount_eur > 0 && (
                     <div className="text-[11px] text-warn-700 mt-1">
-                      needs {t.authority_required.replace(/_/g, ' ')}
+                      {t('wq.needs')} {label(task.authority_required)}
                     </div>
                   )}
                 </button>
@@ -184,7 +171,7 @@ export function WorkQueue({
             />
           ) : (
             <Card>
-              <Empty>Select an item.</Empty>
+              <Empty>{t('wq.selectOne')}</Empty>
             </Card>
           )}
         </div>
@@ -193,8 +180,8 @@ export function WorkQueue({
       {stages.length > 0 && (
         <Card
           className="mt-5"
-          title="The stages you own"
-          subtitle="Everything else on the claim belongs to somebody else, and the platform keeps it that way."
+          title={t('wq.stagesOwned')}
+          subtitle={t('wq.stagesOwnedHint')}
         >
           <div className="grid grid-cols-3 gap-4">
             {stages.map((s) => (
@@ -230,6 +217,10 @@ function TaskDetail({
   onOpenClaim: (ref: string) => void
   onDecided: () => void
 }) {
+  const t = useT()
+  const eur = useMoney()
+  const label = useEnum()
+  const why = useReasonDetail()
   const [detail, setDetail] = useState<Json | null>(null)
   const [outcome, setOutcome] = useState<Json | null>(null)
   const [busy, setBusy] = useState(false)
@@ -273,27 +264,31 @@ function TaskDetail({
   return (
     <div className="space-y-5">
       <Card
-        title={`${task.claim_reference} · ${task.reason.replace(/_/g, ' ')}`}
-        subtitle={task.reason_detail}
+        title={`${task.claim_reference} · ${label(task.reason)}`}
+        subtitle={why(
+          task.reason,
+          { amount: task.proposed_amount_eur, severity: task.severity },
+          task.reason_detail,
+        )}
         right={
           <Button variant="secondary" size="sm" onClick={() => onOpenClaim(task.claim_reference)}>
-            Open the claim
+            {t('wq.openClaim')}
           </Button>
         }
       >
         <KeyValueGrid cols={5}>
-          <Field label="Policyholder">{task.policyholder}</Field>
-          <Field label="Agent proposed">
-            <Chip tone="warn">{task.proposed_decision ?? '—'}</Chip>
+          <Field label={t('wq.policyholder')}>{task.policyholder}</Field>
+          <Field label={t('wq.proposed')}>
+            <Chip tone="warn">{label(task.proposed_decision)}</Chip>
           </Field>
-          <Field label="Amount">{eur(task.proposed_amount_eur)}</Field>
-          <Field label="Needs">{task.authority_required.replace(/_/g, ' ')}</Field>
-          <Field label="Age">{num(task.age_minutes, 0)} min</Field>
+          <Field label={t('wq.amount')}>{eur(task.proposed_amount_eur)}</Field>
+          <Field label={t('wq.needs')}>{label(task.authority_required)}</Field>
+          <Field label={t('wq.age')}>{num(task.age_minutes, 0)} min</Field>
         </KeyValueGrid>
         <div className="flex gap-2 mt-4 flex-wrap">
           {task.injury && <Chip tone="stop">injury reported</Chip>}
           {task.structural && <Chip tone="warn">structural</Chip>}
-          {task.severity && <Chip tone="ghost">{task.severity}</Chip>}
+          {task.severity && <Chip tone="ghost">{label(task.severity)}</Chip>}
         </div>
       </Card>
 
@@ -302,7 +297,7 @@ function TaskDetail({
       ) : (
         <>
           <div className="grid grid-cols-3 gap-4">
-            <Card title="Cover" dense>
+            <Card title={t('wq.cover')} dense>
               {!coverage ? (
                 <p className="text-[12.5px] text-ink-500">Not assessed.</p>
               ) : (
@@ -316,7 +311,7 @@ function TaskDetail({
                           : 'stop'
                     }
                   >
-                    {String(coverage.status).replace(/_/g, ' ')}
+                    {label(String(coverage.status))}
                   </Chip>
                   <p className="text-[12.5px] text-ink-600 mt-2.5 leading-relaxed">
                     {coverage.reasoning as string}
@@ -332,7 +327,7 @@ function TaskDetail({
               )}
             </Card>
 
-            <Card title="Estimate" dense>
+            <Card title={t('wq.estimate')} dense>
               {estimates.length === 0 ? (
                 <p className="text-[12.5px] text-ink-500">No estimate yet.</p>
               ) : (
@@ -344,9 +339,9 @@ function TaskDetail({
                         {eur(e.total_cost as number)}
                       </div>
                       <p className="text-[12px] text-ink-600 mt-1.5">
-                        {eur(e.total_parts as number)} parts ·{' '}
-                        {eur(e.total_labour as number)} labour ·{' '}
-                        {eur(e.total_tax as number)} VAT
+                        {eur(e.total_parts as number)} {t('wq.parts')} ·{' '}
+                        {eur(e.total_labour as number)} {t('wq.labour')} ·{' '}
+                        {eur(e.total_tax as number)} {t('wq.vat')}
                       </p>
                       {e.reasonableness_band ? (
                         <Chip
@@ -355,7 +350,9 @@ function TaskDetail({
                           }
                           className="mt-2.5"
                         >
-                          {e.reasonableness_band as string}
+                          {String(e.reasonableness_band).includes('within')
+                            ? t('wq.withinBand')
+                            : t('wq.outsideBand')}
                         </Chip>
                       ) : null}
                     </>
@@ -364,12 +361,12 @@ function TaskDetail({
               )}
             </Card>
 
-            <Card title="Risk" dense>
+            <Card title={t('wq.risk')} dense>
               <div className="flex items-baseline gap-2.5">
                 <span className="text-[22px] tabular text-ink-900">
                   {Number(risk.score ?? 0).toFixed(2)}
                 </span>
-                <span className="text-[12px] text-ink-500">threshold 0.55</span>
+                <span className="text-[12px] text-ink-500">{t('wq.threshold')} 0.55</span>
               </div>
               <div className="mt-2.5">
                 <Meter
@@ -387,19 +384,19 @@ function TaskDetail({
                   </p>
                 ))}
                 {((risk.signals as Json[]) ?? []).length === 0 && (
-                  <p className="text-[12.5px] text-ink-500">No signals.</p>
+                  <p className="text-[12.5px] text-ink-500">{t('wq.noSignals')}</p>
                 )}
               </div>
             </Card>
           </div>
 
           <Card
-            title="Decision"
+            title={t('wq.decision')}
             subtitle={
               resolved
                 ? 'This task has been resolved.'
                 : canSettle
-                  ? 'Whatever you choose, the write is signed, verified at the gateway and written once.'
+                  ? t('wq.writeNote')
                   : `${persona.role_label} holds no settlement authority. You can record a technical position; the money is decided elsewhere.`
             }
           >
@@ -417,7 +414,7 @@ function TaskDetail({
                 ) : null}
               </div>
             ) : !canSettle ? (
-              <Notice tone="blue" title="Not your call, by design">
+              <Notice tone="blue" title={t('wq.notYourCall')}>
                 An investigator works the network and an assessor makes the technical call.
                 Neither decides the money — that separation is the control, not an
                 oversight. Refer it on when you are done.
@@ -426,7 +423,7 @@ function TaskDetail({
               <>
                 {!withinAuthority && task.proposed_amount_eur > 0 && (
                   <div className="mb-4">
-                    <Notice tone="stop" title="Above your authority">
+                    <Notice tone="stop" title={t('wq.aboveAuthority')}>
                       {eur(task.proposed_amount_eur)} is above your limit of{' '}
                       {eur(persona.authority_limit_eur, 0)}. Approving will be refused
                       before anything is signed — the check is real, not a hidden button.
@@ -435,7 +432,7 @@ function TaskDetail({
                 )}
                 <div className="flex items-end gap-4 flex-wrap">
                   <label className="block">
-                    <span className="text-[12px] text-ink-600">Amount to settle</span>
+                    <span className="text-[12px] text-ink-600">{t('wq.amountToSettle')}</span>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="text-[13px] text-ink-500">EUR</span>
                       <input
@@ -446,11 +443,11 @@ function TaskDetail({
                     </div>
                   </label>
                   <label className="flex-1 min-w-[280px] block">
-                    <span className="text-[12px] text-ink-600">Note for the record</span>
+                    <span className="text-[12px] text-ink-600">{t('wq.noteForRecord')}</span>
                     <input
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
-                      placeholder="Why this decision"
+                      placeholder={t('wq.whyThisDecision')}
                       className="mt-1 w-full bg-white border border-ink-300 rounded-xl px-3.5 py-2 text-[13px] focus:outline-none focus:border-az-500 focus:ring-2 focus:ring-air"
                     />
                   </label>
@@ -486,9 +483,11 @@ function TaskDetail({
 }
 
 function Outcome({ outcome }: { outcome: Json }) {
+  const t = useT()
+  const eur = useMoney()
   if (!outcome.accepted) {
     return (
-      <Card title="Refused">
+      <Card title={t('wq.refused')}>
         <Notice tone="stop" title={String(outcome.reason).replace(/_/g, ' ')}>
           {eur(outcome.required_authority_eur as number)} requires more than the{' '}
           {eur(outcome.your_authority_eur as number, 0)} authority held. Nothing was signed
@@ -501,18 +500,18 @@ function Outcome({ outcome }: { outcome: Json }) {
   const audit = outcome.audit as Json
   return (
     <Card
-      title="Written once, signed"
-      subtitle="A human decision travels the same path as an autonomous one"
+      title={t('wq.writtenSigned')}
+      subtitle={t('wq.samePath')}
       right={<Chip tone="ok">{outcome.recorded_decision as string}</Chip>}
     >
       <KeyValueGrid cols={4}>
-        <Field label="Approver">
+        <Field label={t('wq.approver')}>
           {approver.name as string}
           <div className="text-[11.5px] text-ink-500">{approver.role as string}</div>
         </Field>
-        <Field label="Settled">{eur(outcome.settlement_amount_eur as number)}</Field>
-        <Field label="Approval" mono>{(outcome.approval_ref as string) ?? '—'}</Field>
-        <Field label="Row audit">
+        <Field label={t('wq.settled')}>{eur(outcome.settlement_amount_eur as number)}</Field>
+        <Field label={t('wq.approval')} mono>{(outcome.approval_ref as string) ?? '—'}</Field>
+        <Field label={t('wq.rowAudit')}>
           <Chip tone={audit.healthy ? 'ok' : 'stop'}>
             {audit.healthy ? 'clean' : `${String(audit.tampered_count)} flagged`}
           </Chip>

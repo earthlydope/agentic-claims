@@ -38,6 +38,8 @@ class Feature:
 FEATURES: dict[str, Feature] = {
     "my_claims": Feature("my_claims", "My claims", "Where each of your claims stands",
                          "folder", ("notify", "close")),
+    "my_policies": Feature("my_policies", "My policies",
+                           "What you are covered for, and the documents", "shield", ()),
     "file_claim": Feature("file_claim", "Report an accident", "Tell us what happened",
                           "plus", ("notify", "screen")),
     "work_queue": Feature("work_queue", "My desk", "Claims waiting on you",
@@ -53,19 +55,14 @@ FEATURES: dict[str, Feature] = {
     "recovery": Feature("recovery", "Recovery",
                         "Third-party recovery on settled claims", "arrow-back",
                         ("recovery",)),
-    "team": Feature("team", "Team", "Throughput, SLA and where automation stops",
-                    "chart", ("approval", "close")),
-    "governance": Feature("governance", "Zero trust",
-                          "The three pillars, the ledger and the drills", "lock",
+    "operations": Feature("operations", "Operations",
+                          "Throughput, SLA and where automation stops", "chart",
+                          ("approval", "close")),
+    "governance": Feature("governance", "Assurance",
+                          "What is enforced, the audit trail, and the drills", "lock",
                           ("screen", "guard", "settle")),
-    "evaluations": Feature("evaluations", "Evaluations",
-                           "Golden cases, groundedness and drift", "beaker", ("close",)),
-    "llm_usage": Feature("llm_usage", "Model usage",
-                         "Rate limits, tokens and cost per claim", "gauge", ()),
-    "platform": Feature("platform", "Agents & data",
-                        "The agents, their scopes and the semantic layer", "graph", ()),
-    "coworker": Feature("coworker", "AI coworker", "Ask it to do your work with you",
-                        "sparkle", ()),
+    "model_usage": Feature("model_usage", "Assistant usage",
+                           "Limits, consumption and cost per claim", "gauge", ()),
 }
 
 
@@ -144,8 +141,16 @@ COWORKER_TOOLS: dict[str, CoworkerTool] = {
         "Walk the ledger chain and reconcile it against the live rows.",
         risk_class="read-high"),
     "model_usage": CoworkerTool(
-        "model_usage", "Model usage",
-        "Rate limits, token consumption and cost per claim by model."),
+        "model_usage", "Assistant usage",
+        "Limits, consumption and cost per claim."),
+    "incident_detail": CoworkerTool(
+        "incident_detail", "The incident in full",
+        "Everything recorded about the reported incident, and how each conclusion on the "
+        "file was reached.",
+        risk_class="read-medium"),
+    "my_policy_cover": CoworkerTool(
+        "my_policy_cover", "My cover",
+        "What this policyholder is covered for, in plain language, with the clause."),
 }
 
 
@@ -195,6 +200,7 @@ class Persona:
     coworker: Coworker
     party_id: str | None = None    # customers only
     accent: str = "blue"
+    avatar: str = "handler"        # which 3D illustration represents the role
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -204,7 +210,7 @@ class Persona:
             "authority_limit_eur": self.authority_limit_eur,
             "queues": list(self.queues), "remit": self.remit,
             "measured_on": list(self.measured_on), "party_id": self.party_id,
-            "accent": self.accent,
+            "accent": self.accent, "avatar": self.avatar,
             "features": [
                 {**FEATURES[f].__dict__, "stages": list(FEATURES[f].stages)}
                 for f in self.features if f in FEATURES
@@ -215,24 +221,22 @@ class Persona:
 
 PERSONAS: tuple[Persona, ...] = (
     Persona(
-        key="policyholder",
-        user_id="lena.hofer",
-        name="Lena Hofer",
-        initials="LH",
-        role_label="Policyholder",
-        role_de="Versicherungsnehmerin",
+        key="policy_holder",
+        user_id="policy.holder",
+        name="Policy Holder",
+        initials="PH",
+        role_label="Policy Holder",
+        role_de="Versicherungsnehmer",
         kind="customer",
-        location="Wien",
+        location="Österreich",
         authority_limit_eur=0.0,
         queues=(),
         party_id="PTY-AT-100241",
         accent="teal",
-        remit=(
-            "Reports an accident from her phone, adds what she has, and wants to know "
-            "where her claim is without having to ring anyone."
-        ),
-        measured_on=("time to a decision", "how often she has to ask twice"),
-        features=("my_claims", "file_claim", "coworker"),
+        avatar="holder",
+        remit="Reports an accident and follows their own claim.",
+        measured_on=("time to a decision", "how often they are asked twice"),
+        features=("my_claims", "my_policies", "file_claim"),
         coworker=Coworker(
             name="Claim Assistant",
             tagline="Reports an accident with you and tells you where things stand",
@@ -241,36 +245,33 @@ PERSONAS: tuple[Persona, ...] = (
                 "plain language, and says exactly what is still needed. It never quotes a "
                 "figure the decision does not carry, and it always leaves a route to a person."
             ),
-            tools=("list_my_claims", "explain_my_claim", "what_do_you_need"),
+            tools=("list_my_claims", "explain_my_claim", "what_do_you_need",
+                   "my_policy_cover"),
             starters=(
                 "Where is my claim?",
                 "What do you still need from me?",
-                "Why is my claim with a person?",
+                "What does my policy actually cover?",
                 "How much will I get, and when?",
             ),
             cannot=("approve anything", "change a decision", "see another customer's claim"),
         ),
     ),
     Persona(
-        key="claims_handler",
-        user_id="klaus.reiter",
-        name="Klaus Reiter",
-        initials="KR",
-        role_label="Claims Handler",
-        role_de="Sachbearbeiter Kfz-Schadenregulierung",
+        key="claim_handler",
+        user_id="claim.handler",
+        name="Claim Handler",
+        initials="CH",
+        role_label="Claim Handler",
+        role_de="Sachbearbeiter Kfz-Schaden",
         kind="staff",
         location="Wien",
         authority_limit_eur=5_000.0,
         queues=("handler", "coverage"),
         accent="blue",
-        remit=(
-            "Owns the desk file. Establishes cover, routes the claim to an assessor or a "
-            "repairer, settles within his authority, refers what he cannot settle, flags "
-            "anything that smells wrong to SIU, and looks for a third party to recover from."
-        ),
-        measured_on=("claims closed per week", "first-time-right", "recovery identified",
-                     "leakage"),
-        features=("work_queue", "recovery", "coworker"),
+        avatar="handler",
+        remit="Owns the file. Cover, settlement within authority, referrals, recovery.",
+        measured_on=("claims closed", "first-time-right", "recovery identified", "leakage"),
+        features=("work_queue", "recovery"),
         coworker=Coworker(
             name="Desk Assistant",
             tagline="Works the file with you — cover, position, and the next move",
@@ -281,23 +282,24 @@ PERSONAS: tuple[Persona, ...] = (
                 "not send them."
             ),
             tools=("list_my_queue", "summarise_claim", "why_was_it_held", "check_coverage",
-                   "recovery_prospects", "draft_customer_note", "my_authority"),
+                   "recovery_prospects", "draft_customer_note", "my_authority",
+                   "incident_detail"),
             starters=(
                 "What is on my desk, most pressing first?",
-                "Why was AT-2026-004418 held?",
+                "Why was this claim held?",
                 "Is own-vehicle damage covered under a liability-only policy?",
-                "Is there anyone to recover from on AT-2026-004421?",
+                "Tell me everything about the reported incident.",
                 "Draft a note to the customer explaining the delay.",
             ),
             cannot=("approve above EUR 5,000", "send a message to a customer",
-                    "open an SIU investigation itself"),
+                    "open an investigation itself"),
         ),
     ),
     Persona(
         key="motor_assessor",
-        user_id="martin.gruber",
-        name="Martin Gruber",
-        initials="MG",
+        user_id="motor.assessor",
+        name="Motor Assessor",
+        initials="MA",
         role_label="Motor Assessor",
         role_de="Kfz-Sachverständiger",
         kind="staff",
@@ -305,95 +307,45 @@ PERSONAS: tuple[Persona, ...] = (
         authority_limit_eur=0.0,
         queues=("assessment",),
         accent="amber",
-        remit=(
-            "Judges the damage itself: which panels, repair or replace, whether the "
-            "structure is affected, and whether the vehicle is worth repairing at all. "
-            "Holds no settlement authority — the technical call and the money are separate "
-            "on purpose."
-        ),
-        measured_on=("estimate accuracy against final invoice",
-                     "total-loss calls that hold up", "assessment turnaround"),
-        features=("assessment_queue", "coworker"),
+        avatar="assessor",
+        remit="Judges the damage, the repair scope, and whether the vehicle is worth repairing.",
+        measured_on=("estimate accuracy", "total-loss calls that hold", "turnaround"),
+        features=("assessment_queue",),
         coworker=Coworker(
             name="Assessor Assistant",
             tagline="Checks the estimate and the repairability call with you",
             remit=(
                 "Walks an itemised estimate against the approved parts catalogue and the "
-                "regional labour rate, flags any line that is outside the band, and works "
-                "the repair-cost-to-replacement-value test that decides a total loss."
+                "regional labour rate, flags any line outside the band, and works the "
+                "repair-cost-to-replacement-value test that decides a total loss."
             ),
             tools=("list_my_queue", "review_estimate", "check_repairability",
-                   "summarise_claim"),
+                   "summarise_claim", "incident_detail"),
             starters=(
                 "Which assessments are waiting on me?",
-                "Walk me through the estimate on AT-2026-004418.",
-                "Is AT-2026-004420 economically repairable?",
-                "Which lines on this estimate are outside the band?",
+                "Walk me through the estimate on this claim.",
+                "Is this vehicle economically repairable?",
+                "Which lines are outside the catalogue?",
             ),
             cannot=("settle a claim", "approve a payment", "change the cover position"),
         ),
     ),
     Persona(
-        key="team_leader",
-        user_id="ingrid.mayer",
-        name="Ingrid Mayer",
-        initials="IM",
-        role_label="Claims Team Leader",
-        role_de="Teamleiterin Schaden Kfz",
-        kind="staff",
-        location="Wien",
-        authority_limit_eur=25_000.0,
-        queues=("supervisor", "handler", "injury"),
-        accent="indigo",
-        remit=(
-            "Approves what is above handler authority, owns the team's SLA, and reviews a "
-            "sample of what the platform decided on its own. Where automation stops most "
-            "often is her problem to fix, not the platform's to hide."
-        ),
-        measured_on=("SLA attainment", "approval turnaround",
-                     "override rate by reason", "straight-through rate"),
-        features=("approvals", "team", "coworker"),
-        coworker=Coworker(
-            name="Supervisor Assistant",
-            tagline="Prepares the approvals and shows where automation is stopping",
-            remit=(
-                "Prepares an approval: what the agent proposed, which checks stopped it, "
-                "what the exposure is, and what authority it needs. Then shows where "
-                "automation is stopping most often across the team and why."
-            ),
-            tools=("list_my_queue", "why_was_it_held", "summarise_claim", "my_authority",
-                   "team_position"),
-            starters=(
-                "What is waiting on my approval?",
-                "Prepare AT-2026-004418 for me — what am I signing?",
-                "Where is automation stopping most often this week?",
-                "Which claims are at risk of breaching SLA?",
-            ),
-            cannot=("approve on her behalf", "raise its own authority",
-                    "release an SIU freeze"),
-        ),
-    ),
-    Persona(
-        key="siu_investigator",
-        user_id="thomas.wagner",
-        name="Thomas Wagner",
-        initials="TW",
+        key="siu",
+        user_id="siu",
+        name="Special Investigations",
+        initials="SI",
         role_label="Special Investigations",
-        role_de="Sonderermittlung / Betrugsabwehr",
+        role_de="Sonderermittlung",
         kind="staff",
         location="Wien",
         authority_limit_eur=0.0,
         queues=("siu",),
         accent="rose",
-        remit=(
-            "Takes referrals from handlers and from the platform's own signals, works the "
-            "relationships behind them, and either releases the claim or refers it on. "
-            "Settlement authority is zero by design: he investigates, he does not decide "
-            "the money."
-        ),
-        measured_on=("referrals worked", "confirmed leakage prevented",
-                     "false-positive rate"),
-        features=("investigations", "coworker"),
+        avatar="siu",
+        remit="Works referrals and the relationships behind them. Never decides the money.",
+        measured_on=("referrals worked", "leakage prevented", "false-positive rate"),
+        features=("investigations",),
         coworker=Coworker(
             name="Investigation Assistant",
             tagline="Walks the network and separates signal from coincidence",
@@ -402,10 +354,10 @@ PERSONAS: tuple[Persona, ...] = (
                 "device, address and repairer graph around it. It reports signals, never "
                 "findings — and it will say when a pattern is more likely coincidence."
             ),
-            tools=("list_my_queue", "risk_picture", "summarise_claim"),
+            tools=("list_my_queue", "risk_picture", "summarise_claim", "incident_detail"),
             starters=(
                 "What has been referred to me?",
-                "Show me the network around AT-2026-004420.",
+                "Show me the network around this claim.",
                 "Why was this claim frozen?",
                 "Is this pattern strong enough to open an investigation?",
             ),
@@ -414,49 +366,57 @@ PERSONAS: tuple[Persona, ...] = (
         ),
     ),
     Persona(
-        key="compliance_officer",
-        user_id="eva.pichler",
-        name="Eva Pichler",
-        initials="EP",
-        role_label="Compliance & Operational Risk",
-        role_de="Compliance & Operationelles Risiko",
+        key="compliance_ops",
+        user_id="compliance.ops",
+        name="Compliance & Operations",
+        initials="CO",
+        role_label="Compliance & Operations",
+        role_de="Compliance & Betrieb",
         kind="staff",
         location="Wien",
-        authority_limit_eur=0.0,
-        queues=(),
+        # Operations owns the escalated approval that sits above handler authority;
+        # Compliance owns assurance. Both live in this function, and the platform keeps the
+        # two visible — an approval here is recorded as an Operations act, not a
+        # compliance one.
+        authority_limit_eur=25_000.0,
+        queues=("operations", "injury", "handler"),
         accent="slate",
+        avatar="compliance",
         remit=(
-            "Reads the platform rather than the claims. Which controls are on, what they "
-            "stopped, whether the ledger still verifies, whether quality has drifted, and "
-            "what the models are costing. Read-only everywhere by design."
+            "Approves what is above handler authority, and reads the platform rather than "
+            "the claims."
         ),
-        measured_on=("control coverage", "audit findings closed",
-                     "evaluation pass rate", "cost per claim"),
-        features=("governance", "evaluations", "llm_usage", "platform", "coworker"),
+        measured_on=("approval turnaround", "control coverage", "evaluation pass rate",
+                     "cost per claim"),
+        features=("approvals", "operations", "governance", "model_usage"),
         coworker=Coworker(
             name="Assurance Assistant",
-            tagline="Answers what is enforced, what it stopped, and what it cost",
+            tagline="Prepares approvals, and answers what is enforced and what it cost",
             remit=(
-                "Reports the state of the control plane: which pillars are active, what "
-                "each one is enforcing, what it has stopped, whether the ledger chain and "
-                "the live rows still agree, and what the models are consuming."
+                "Prepares an approval: what was proposed, which checks stopped it, what the "
+                "exposure is. Then reports the state of the controls — what is enforced, "
+                "what it has stopped, whether anything changed out of band, and what the "
+                "models are consuming."
             ),
-            tools=("security_posture", "verify_integrity", "model_usage",
-                   "why_was_it_held"),
+            tools=("list_my_queue", "why_was_it_held", "my_authority", "team_position",
+                   "security_posture", "verify_integrity", "model_usage",
+                   "incident_detail"),
             starters=(
-                "What is being enforced right now?",
+                "What is waiting on my approval?",
+                "Prepare this claim for me — what am I signing?",
+                "Where is automation stopping most often?",
                 "Has anything been changed out of band?",
-                "What have the controls stopped this week?",
-                "What are we spending per claim, and on which model?",
             ),
-            cannot=("approve anything", "change a threshold", "clear a security event"),
+            cannot=("approve on someone else's behalf", "change a threshold",
+                    "clear a security event"),
         ),
     ),
 )
 
+
 PERSONA_BY_KEY: dict[str, Persona] = {p.key: p for p in PERSONAS}
 PERSONA_BY_USER: dict[str, Persona] = {p.user_id: p for p in PERSONAS}
-DEFAULT_PERSONA = "claims_handler"
+DEFAULT_PERSONA = "claim_handler"
 
 
 def persona(key: str | None) -> Persona:
@@ -477,18 +437,19 @@ def coworker_tools_for(key: str | None) -> tuple[str, ...]:
 
 # Queue → the personas that work it. Used to scope a work list to whoever is looking.
 QUEUE_OWNERS: dict[str, tuple[str, ...]] = {
-    "handler": ("claims_handler", "team_leader"),
-    "coverage": ("claims_handler",),
+    "handler": ("claim_handler", "compliance_ops"),
+    "coverage": ("claim_handler",),
     "assessment": ("motor_assessor",),
-    "supervisor": ("team_leader",),
-    "injury": ("team_leader",),
-    "siu": ("siu_investigator",),
+    "operations": ("compliance_ops",),
+    "injury": ("compliance_ops",),
+    "siu": ("siu",),
 }
 
-# Legacy queue names still written by the guard routing, mapped onto the roles above.
+# Older queue names still written by the guard routing, mapped onto the roles above.
 QUEUE_ALIASES: dict[str, str] = {
     "adjuster": "handler",
     "specialist": "injury",
+    "supervisor": "operations",
 }
 
 
@@ -531,5 +492,15 @@ def staff_by_id(user_id: str) -> dict[str, Any] | None:
     return next((s for s in STAFF if s["user_id"] == user_id), None)
 
 
-# Settlement authority, keyed the way the write gateway asks for it.
-AUTHORITY_LIMITS_EUR: dict[str, float] = {p.key: p.authority_limit_eur for p in PERSONAS}
+# Settlement authority, keyed the way the write gateway asks for it — plus the older role
+# names, so the gateway and the routing need no translation layer.
+AUTHORITY_LIMITS_EUR: dict[str, float] = {p.key: p.authority_limit_eur for p in PERSONAS} | {
+    "policyholder": 0.0,
+    "claims_handler": 5_000.0,
+    "adjuster": 5_000.0,
+    "team_leader": 25_000.0,
+    "supervisor": 25_000.0,
+    "siu_investigator": 0.0,
+    "compliance_officer": 25_000.0,
+    "compliance": 25_000.0,
+}

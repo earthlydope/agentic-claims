@@ -5,12 +5,14 @@ import {
   KeyValueGrid, Mono, PageHeader, PillarChip, Spinner, Stat, statusTone,
   Table, Tabs, Td,
 } from '../components/ui'
+import { useT } from '../lib/i18n'
 import { eur, num, pct, shortHash, when } from '../lib/format'
 import type { Json } from '../types'
 
 type Tab = 'posture' | 'ledger' | 'drills' | 'suite' | 'events'
 
 export function ZeroTrust() {
+  const t = useT()
   const [tab, setTab] = useState<Tab>('posture')
   const [posture, setPosture] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -32,8 +34,8 @@ export function ZeroTrust() {
     <>
       <PageHeader
         eyebrow="Zero-trust control plane"
-        title="Governance console"
-        lede="Every prompt, every tool call and every write passes through here. Prompt instructions are never the security boundary — each control passes or fails a test rather than being a paragraph of assurance."
+        title={t('zt.title')}
+        lede={t('zt.lede')}
         right={
           <div className="flex gap-2">
             <Button variant="secondary" onClick={load}>

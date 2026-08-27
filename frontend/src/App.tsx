@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import { Shell } from './components/Shell'
+import { CoworkerDock } from './components/CoworkerDock'
 import { Button, ErrorNote, Spinner } from './components/ui'
-import { Coworker } from './views/Coworker'
+import { LanguageProvider, useT } from './lib/i18n'
 import { MyClaims } from './views/MyClaims'
+import { MyPolicies } from './views/MyPolicies'
 import { ModelUsage } from './views/ModelUsage'
 import { WorkQueue } from './views/WorkQueue'
 import { FileClaim } from './views/FileClaim'
 import { ClaimWorkbench } from './views/ClaimWorkbench'
 import { ZeroTrust } from './views/ZeroTrust'
-import { AgentsData } from './views/AgentsData'
-import { Observability } from './views/Observability'
 import { TeamView } from './views/TeamView'
-import type { Json, Persona } from './types'
+import type { Persona } from './types'
 
 /** Hash routes read `#persona/feature[/param]`, so a view is always shareable. */
 function useRoute() {
@@ -29,27 +29,23 @@ function useRoute() {
   return { persona, feature, param, go }
 }
 
-export default function App() {
+function Platform() {
+  const t = useT()
   const { persona: routePersona, feature: routeFeature, param, go } = useRoute()
   const [personas, setPersonas] = useState<Persona[] | null>(null)
-  const [platform, setPlatform] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [resetting, setResetting] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [defaultPersona, setDefaultPersona] = useState('claims_handler')
+  const [defaultPersona, setDefaultPersona] = useState('claim_handler')
 
   useEffect(() => {
-    Promise.all([api.personas(), api.platform()])
-      .then(([p, plat]) => {
+    api
+      .personas()
+      .then((p) => {
         setPersonas((p as { personas: Persona[] }).personas)
         setDefaultPersona((p as { default: string }).default)
-        setPlatform(plat)
       })
-      .catch((e: Error) =>
-        setError(
-          `Could not reach the platform API on port 8099. ${e.message}`,
-        ),
-      )
+      .catch((e: Error) => setError(`Could not reach the platform API. ${e.message}`))
   }, [])
 
   const active = useMemo(() => {
@@ -67,7 +63,7 @@ export default function App() {
     return keys.includes(routeFeature) ? routeFeature : keys[0]
   }, [active, routeFeature])
 
-  // Keep the URL honest: a persona switch lands on a view that persona actually has.
+  // Keep the URL honest: a role switch lands on a view that role actually has.
   useEffect(() => {
     if (!active) return
     if (routePersona !== active.key || routeFeature !== feature) {
@@ -98,13 +94,13 @@ export default function App() {
     )
   }
 
-  if (!personas || !active) return <Spinner label="Connecting to the claims platform…" />
+  if (!personas || !active) return <Spinner label={t('g.loading')} />
 
   const openClaim = (ref: string) => go(`${active.key}/${feature}/${ref}`)
 
   const view = () => {
-    // A claim reference in the URL opens the workbench, whichever view you came from.
-    if (param.startsWith('AT-')) {
+    // A claim reference in the URL opens the file, whichever view you came from.
+    if (param.startsWith('AT-2')) {
       return (
         <ClaimWorkbench
           key={param}
@@ -125,8 +121,23 @@ export default function App() {
             refreshKey={refreshKey}
           />
         )
+      case 'my_policies':
+        return (
+          <MyPolicies
+            persona={active}
+            onClaimOn={(policyNumber) => go(`${active.key}/file_claim/${policyNumber}`)}
+            onOpenClaim={openClaim}
+            refreshKey={refreshKey}
+          />
+        )
       case 'file_claim':
-        return <FileClaim onOpenClaim={openClaim} />
+        return (
+          <FileClaim
+            persona={active}
+            presetPolicy={param.startsWith('AT-MOT-') ? param : undefined}
+            onOpenClaim={openClaim}
+          />
+        )
       case 'work_queue':
       case 'assessment_queue':
       case 'approvals':
@@ -140,27 +151,22 @@ export default function App() {
             refreshKey={refreshKey}
           />
         )
-      case 'team':
+      case 'operations':
         return <TeamView persona={active} refreshKey={refreshKey} />
       case 'governance':
         return <ZeroTrust />
-      case 'evaluations':
-        return <Observability />
-      case 'llm_usage':
+      case 'model_usage':
         return <ModelUsage />
-      case 'platform':
-        return <AgentsData />
-      case 'coworker':
-        return <Coworker persona={active} />
       default:
         return (
           <div className="py-16 text-center">
-            <p className="text-[14px] text-ink-600">
-              Nothing is wired to “{feature}” yet.
-            </p>
+            <p className="text-[14px] text-ink-600">Nothing is wired to “{feature}” yet.</p>
             <div className="mt-4">
-              <Button variant="secondary" onClick={() => go(`${active.key}/coworker`)}>
-                Ask your coworker instead
+              <Button
+                variant="secondary"
+                onClick={() => go(`${active.key}/${active.features[0].key}`)}
+              >
+                {t('cl.back')}
               </Button>
             </div>
           </div>
@@ -169,17 +175,28 @@ export default function App() {
   }
 
   return (
-    <Shell
-      personas={personas}
-      active={active}
-      onSwitch={(key) => go(key)}
-      feature={feature}
-      onFeature={(f) => go(`${active.key}/${f}`)}
-      platform={platform}
-      onReset={onReset}
-      resetting={resetting}
-    >
-      {view()}
-    </Shell>
+    <>
+      <Shell
+        personas={personas}
+        active={active}
+        onSwitch={(key) => go(key)}
+        feature={feature}
+        onFeature={(f) => go(`${active.key}/${f}`)}
+        onReset={onReset}
+        resetting={resetting}
+      >
+        {view()}
+      </Shell>
+      {/* Every role gets one, on every screen. */}
+      <CoworkerDock persona={active} />
+    </>
+  )
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <Platform />
+    </LanguageProvider>
   )
 }

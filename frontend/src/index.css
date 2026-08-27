@@ -124,3 +124,5 @@ button { font-family: inherit; }
 .elev-1 { box-shadow: 0 1px 2px 0 rgb(60 64 67 / 0.08), 0 1px 3px 1px rgb(60 64 67 / 0.06); }
 .elev-2 { box-shadow: 0 1px 3px 0 rgb(60 64 67 / 0.12), 0 4px 8px 3px rgb(60 64 67 / 0.08); }
 .elev-3 { box-shadow: 0 4px 8px 0 rgb(60 64 67 / 0.14), 0 8px 24px 4px rgb(60 64 67 / 0.1); }
+/* The docked assistant floats above everything, so it needs to read as lifted, not layered. */
+.elev-4 { box-shadow: 0 8px 12px 0 rgb(60 64 67 / 0.16), 0 16px 40px 8px rgb(60 64 67 / 0.14); }

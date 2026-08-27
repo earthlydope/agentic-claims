@@ -626,7 +626,10 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
     estimate = out.get("repair_estimate") or {}
     damage = out.get("damage_assessment") or {}
     risk = out.get("fraud_risk") or {}
-    evidence = (out.get("intake_orchestrator") or {}).get("evidence") or {}
+    # TriageResult is flat, not nested under an "evidence" key. Reading a nested one
+    # silently turned a measured completeness into 0.0 — and 0.0 is not a neutral default
+    # here: it is the value that says "we have nothing", which is a different claim.
+    triage = out.get("intake_orchestrator") or {}
 
     decision = str(proposal.get("decision") or "Review Required").strip() or "Review Required"
 
@@ -670,9 +673,11 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
             "recommendation": risk.get("recommendation"),
         },
         "evidence": {
-            "missing": list(evidence.get("missing") or []),
-            "unreadable": list(evidence.get("unreadable") or []),
-            "completeness": _num(evidence.get("completeness")),
+            "missing": list(triage.get("missing") or []),
+            "unreadable": list(triage.get("unreadable") or []),
+            "completeness": _num(triage.get("evidence_completeness")),
+            "next_step": triage.get("next_step") or "",
+            "questions": list(triage.get("customer_questions") or []),
         },
         "model_restatement": {
             "total_cost": _num(claimed_estimate.get("total_cost")),
@@ -803,15 +808,16 @@ def _queue_from_signals(
             "coverage", "coverage_uncertain_or_excluded",
             f"Coverage position is '{coverage_status}' — referred to a coverage adjuster.",
         )
-    if value > AUTHORITY_LIMITS_EUR["claims_handler"]:
+    if value > AUTHORITY_LIMITS_EUR["claim_handler"]:
         return (
-            "supervisor", "agent_requested_review",
-            f"The agent asked for review on a claim valued at EUR {value:,.2f}, which is "
-            "above adjuster authority.",
+            "operations", "agent_requested_review",
+            f"Automation stopped on a claim valued at EUR {value:,.2f}, which is above "
+            "handler authority.",
         )
     return (
         "handler", "agent_requested_review",
-        "The agent did not propose an autonomous outcome and asked for a person to decide.",
+        "Automation did not reach an outcome it could issue on its own, so a person "
+        "decides.",
     )
 
 
@@ -876,7 +882,7 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
         queue, reason, detail = ("handler", "evidence_incomplete",
             "Required evidence is incomplete for the decision proposed.")
     elif failed & {"PG-01", "PG-02", "PG-03"}:
-        queue = "supervisor" if value > AUTHORITY_LIMITS_EUR["claims_handler"] else "handler"
+        queue = "operations" if value > AUTHORITY_LIMITS_EUR["claim_handler"] else "handler"
         reason = "ceiling_or_severity"
         detail = (
             f"EUR {value:,.2f} with severity '{enforced.get('severity')}' is outside the "
@@ -898,19 +904,20 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
 
 
 AUTHORITY_BY_QUEUE: dict[str, str] = {
-    "supervisor": "team_leader",
-    "injury": "team_leader",
-    "siu": "siu_investigator",
+    "operations": "compliance_ops",
+    "supervisor": "compliance_ops",   # older name for the same queue
+    "injury": "compliance_ops",
+    "siu": "siu",
     "assessment": "motor_assessor",
-    "handler": "claims_handler",
-    "coverage": "claims_handler",
-    "security": "compliance_officer",
+    "handler": "claim_handler",
+    "coverage": "claim_handler",
+    "security": "compliance_ops",
 }
 
 
 def _authority_for_queue(queue: str | None) -> str:
     """Which persona's authority a queue demands."""
-    return AUTHORITY_BY_QUEUE.get(queue or "", "claims_handler")
+    return AUTHORITY_BY_QUEUE.get(queue or "", "claim_handler")
 
 
 def _action_for(

@@ -540,7 +540,7 @@ def _seed_history(db: Session) -> int:
             third_party_involved=rng.random() < 0.45,
             decision=decision,
             settlement_amount_eur=amount if decision == "Approved" else 0.0,
-            assigned_queue=None if straight else rng.choice(["adjuster", "supervisor", "siu", "coverage"]),
+            assigned_queue=None if straight else rng.choice(["handler", "operations", "siu", "coverage"]),
             evidence_completeness=round(rng.uniform(0.72, 1.0), 2),
             fraud_score=fraud,
             straight_through=straight,

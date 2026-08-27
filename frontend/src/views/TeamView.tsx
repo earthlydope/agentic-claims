@@ -4,10 +4,12 @@ import {
   Avatar, Button, Card, Chip, Empty, ErrorNote, Meter, PageHeader, Spinner, Stat,
   Table, Td,
 } from '../components/ui'
+import { useT } from '../lib/i18n'
 import { eur, num, pct } from '../lib/format'
 import type { Json, Persona } from '../types'
 
 export function TeamView({ persona, refreshKey }: { persona: Persona; refreshKey: number }) {
+  const t = useT()
   const [metrics, setMetrics] = useState<Json | null>(null)
   const [queue, setQueue] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -50,7 +52,7 @@ export function TeamView({ persona, refreshKey }: { persona: Persona; refreshKey
             {persona.role_label}
           </span>
         }
-        title="Team"
+        title={t('tv.title')}
         lede="Throughput, SLA pressure, and where automation is stopping most often. Where it stops is yours to fix, not the platform's to hide."
         right={
           <Button variant="secondary" size="sm" onClick={load}>
@@ -60,8 +62,8 @@ export function TeamView({ persona, refreshKey }: { persona: Persona; refreshKey
       />
 
       <Card
-        title="The five measures"
-        subtitle="Each computed from claim rows rather than asserted"
+        title={t('tv.fiveMeasures')}
+        subtitle={t('tv.computedFrom')}
         className="mb-5"
       >
         <div className="grid grid-cols-5 gap-8">
@@ -115,7 +117,7 @@ export function TeamView({ persona, refreshKey }: { persona: Persona; refreshKey
       </Card>
 
       <div className="grid grid-cols-2 gap-5">
-        <Card title="Open work by queue" subtitle="And what is at stake on each">
+        <Card title={t('tv.openByQueue')} subtitle={t('tv.andWhatAtStake')}>
           {queues.length === 0 ? (
             <Empty>Every queue is clear.</Empty>
           ) : (
@@ -140,7 +142,7 @@ export function TeamView({ persona, refreshKey }: { persona: Persona; refreshKey
         </Card>
 
         <Card
-          title="Where automation stopped"
+          title={t('tv.whereStopped')}
           subtitle="By reason, not as one number — an override rate you cannot decompose tells you nothing"
         >
           {reasons.length === 0 ? (

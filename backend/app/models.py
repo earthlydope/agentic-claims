@@ -380,6 +380,28 @@ class ModelCall(Base):
     error = Column(String)
 
 
+class StageFeedback(Base):
+    """A person's verdict on one stage's result.
+
+    The star is not decoration. Whether the people who do this work think a stage got it
+    right is the only signal that tells you where the automation is actually trusted, and
+    it is the input to the evaluation set — a stage marked wrong is a golden case waiting
+    to be written. It is stored per claim, per stage, per role, so one person's view does
+    not overwrite another's.
+    """
+
+    __tablename__ = "stage_feedback"
+
+    feedback_id = Column(String, primary_key=True)
+    claim_reference = Column(String, index=True)
+    stage_id = Column(String, index=True)
+    agent = Column(String)
+    persona = Column(String, index=True)
+    helpful = Column(Boolean)
+    note = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class CoworkerTurn(Base):
     """One exchange with a persona's AI coworker."""
 

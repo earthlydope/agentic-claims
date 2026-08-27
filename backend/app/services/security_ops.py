@@ -207,8 +207,8 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
 
     try:
         gw.issue_approval(claim_id="T5", action="claim.settlement.write",
-                          amount_eur=30_000.0, approver_id="klaus.reiter",
-                          approver_role="adjuster")
+                          amount_eur=30_000.0, approver_id="claim.handler",
+                          approver_role="claim_handler")
         authority_held = False
         authority_detail = "An adjuster was allowed to approve EUR 30,000."
     except PermissionError as exc:
@@ -243,7 +243,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved",
         "estimate": {"total_cost": 9_506.64, "total_labour": 3_323.20,
                      "total_parts": 4_599.00, "total_tax": 1_584.44},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
         "severity": "simple",
     })
     case("PG-C1", 1, "Financial ceiling downgrade",
@@ -254,7 +254,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved", "severity": "complex",
         "estimate": {"total_cost": 900.0, "total_labour": 400.0, "total_parts": 350.0,
                      "total_tax": 150.0},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
     })
     case("PG-C2", 1, "Severity coherence enforced",
          not severity.passed,
@@ -264,7 +264,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved", "severity": "simple",
         "estimate": {"total_cost": 1_000.0, "total_labour": 400.0, "total_parts": 350.0,
                      "total_tax": 150.0},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
     })
     case("PG-C3", 1, "Arithmetic integrity enforced",
          not arithmetic.passed,
@@ -284,7 +284,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved", "severity": "simple", "injury_reported": True,
         "estimate": {"total_cost": 900.0, "total_labour": 400.0, "total_parts": 350.0,
                      "total_tax": 150.0},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
     })
     case("PG-C5", 1, "Injury stop enforced", not injury.passed,
          next((c.detail for c in injury.checks if c.check_id == "PG-07"), ""))
@@ -293,7 +293,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved", "severity": "simple",
         "estimate": {"total_cost": 900.0, "total_labour": 400.0, "total_parts": 350.0,
                      "total_tax": 150.0},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
         "risk": {"score": 0.75},
     })
     case("PG-C6", 1, "Fraud threshold freezes autonomy", not fraud.passed,
@@ -303,7 +303,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "decision": "Approved", "severity": "simple",
         "estimate": {"total_cost": 1_442.30, "total_labour": 823.60,
                      "total_parts": 378.32, "total_tax": 240.38},
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
         "risk": {"score": 0.0}, "evidence": {"missing": []},
     })
     case("PG-C7", 1, "A compliant decision passes untouched", clean.passed, clean.reasoning)
@@ -321,7 +321,7 @@ def run_regression_suite(db: Session) -> dict[str, Any]:
         "Is damage to my own vehicle covered?", product="Vollkasko"
     )
     case("KN-03", 1, "Product filter applied during retrieval",
-         all(r.clause.clause_id != "AKB-§7.2" for r in filtered),
+         all(r.clause.clause_id != "AKHB Art 8.2" for r in filtered),
          "The liability-only exclusion is not retrievable for a comprehensive policy.")
 
     # -- Pillar 1: the SSRF guard and outbound comms -------------------

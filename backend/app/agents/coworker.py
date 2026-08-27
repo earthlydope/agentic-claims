@@ -489,7 +489,7 @@ def my_authority() -> dict[str, Any]:
         "above_me": {
             role: limit for role, limit in AUTHORITY_LIMITS_EUR.items()
             if limit > c.persona.authority_limit_eur and role in
-            ("claims_handler", "team_leader")
+            ("claim_handler", "compliance_ops")
         },
         "note": (
             "Authority is checked before anything is signed, so an attempt above it is "
@@ -621,6 +621,162 @@ def model_usage() -> dict[str, Any]:
     }
 
 
+def _iso(value: Any) -> str | None:
+    """A date or datetime as ISO, whether it arrived as one or as a string."""
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _reporting_delay(claim: Claim) -> float | None:
+    """Days between the incident and the notification.
+
+    How late a claim was reported is one of the strongest signals on a file, so it is
+    computed here rather than left for a reader to work out — but only where both dates are
+    genuinely present, because a guessed delay is worse than none.
+    """
+    import datetime as _dt
+
+    incident, reported = claim.incident_date, claim.reported_at
+    if not incident or not reported:
+        return None
+    try:
+        if isinstance(incident, str):
+            incident = _dt.date.fromisoformat(incident[:10])
+        if isinstance(incident, _dt.datetime):
+            incident = incident.date()
+        reported_date = reported.date() if isinstance(reported, _dt.datetime) else reported
+        if isinstance(reported_date, str):
+            reported_date = _dt.date.fromisoformat(reported_date[:10])
+        return float((reported_date - incident).days)
+    except (ValueError, TypeError):
+        return None
+
+
+def incident_detail(reference: str) -> dict[str, Any]:
+    """Everything recorded about a reported incident, and how each conclusion was reached.
+
+    This is the deep read: the report as it came in, what was extracted from the documents
+    and how confident each field is, what the photographs supported, and the reasoning that
+    each stage of the assessment left behind.
+
+    Args:
+        reference: The claim reference.
+    """
+    c = ctx()
+    _note("incident_detail", [reference])
+    claim = c.db.get(Claim, reference)
+    if claim is None:
+        return {"error": f"No claim {reference}."}
+
+    from app.models import AgentRun
+
+    c360 = query_api.execute("get_claim_360", db=c.db, reference=reference).get("data") or {}
+    extractions = query_api.execute("get_extractions", db=c.db,
+                                    reference=reference).get("data") or []
+    # get_claim_timeline returns the events as a list, not an envelope.
+    timeline = query_api.execute("get_claim_timeline", db=c.db,
+                                 reference=reference).get("data") or []
+
+    # The reasoning each stage left behind. This is what makes the difference between
+    # "the claim was held" and "here is the paragraph the assessor would have written".
+    run = c.db.scalars(
+        select(AgentRun).where(AgentRun.claim_reference == reference)
+        .order_by(AgentRun.started_at.desc()).limit(1)
+    ).first()
+    reasoning: list[dict[str, Any]] = []
+    if run is not None:
+        # AgentRun.trace is a flat list of events, not an envelope around one.
+        for ev in run.trace or []:
+            payload = (ev.get("data") or {}).get("output") or {}
+            narrative = (
+                payload.get("rationale") or payload.get("reasoning")
+                or payload.get("narrative") or payload.get("summary")
+                or payload.get("assessment_note")
+            )
+            if narrative:
+                reasoning.append({
+                    "stage": ev.get("stage") or ev.get("agent"),
+                    "said": narrative,
+                    "confidence": payload.get("confidence"),
+                })
+
+    return {
+        "reference": reference,
+        "reported": {
+            "as_told": claim.fnol_text,
+            "channel": claim.channel,
+            "language": claim.language,
+            "reported_at": _iso(claim.reported_at),
+            "incident_date": _iso(claim.incident_date),
+            "days_to_report": _reporting_delay(claim),
+        },
+        "where": {
+            "location": claim.incident_location,
+            "city": claim.incident_city,
+            "region": claim.incident_region,
+        },
+        "what": {
+            "incident_type": claim.incident_type,
+            "collision_type": claim.collision_type,
+            "severity": claim.severity,
+            "structural_damage": bool(claim.structural_damage),
+            "injury_reported": bool(claim.injury_reported),
+            "third_party_involved": bool(claim.third_party_involved),
+            "police_report_ref": claim.police_report_ref,
+        },
+        "vehicle": (c360.get("vehicle") or {}),
+        "evidence": {
+            "completeness": claim.evidence_completeness,
+            "extracted_fields": extractions,
+        },
+        "reasoning_by_stage": reasoning,
+        "timeline": timeline,
+        "note": (
+            "Reported facts are the customer's account. Extracted fields carry the "
+            "confidence they earned. Reasoning is what each stage recorded, not a "
+            "conclusion of this assistant."
+        ),
+    }
+
+
+def my_policy_cover() -> dict[str, Any]:
+    """What this policyholder is covered for, in plain language, with the clause behind it.
+
+    Only ever the policies belonging to the party this session is signed in as.
+    """
+    c = ctx()
+    _note("my_policy_cover")
+    if not c.persona.party_id:
+        return {"error": "This role does not hold policies."}
+
+    from app.models import Policy, Vehicle
+
+    policies = c.db.scalars(
+        select(Policy).where(Policy.party_id == c.persona.party_id)
+    ).all()
+    out = []
+    for pol in policies:
+        vehicle = c.db.scalars(select(Vehicle).where(Vehicle.vin == pol.vin)).first()
+        cover = query_api.execute("get_policy_coverage", db=c.db,
+                                  policy_number=pol.policy_number).get("data") or {}
+        out.append({
+            "policy_number": pol.policy_number,
+            "product": pol.product,
+            "status": pol.status,
+            "vehicle": f"{vehicle.make} {vehicle.model} ({vehicle.plate})" if vehicle else None,
+            "excess_eur": pol.excess_eur,
+            "cover": cover,
+        })
+    return {
+        "policies": out,
+        "note": (
+            "Cover is what the policy says, not what the claim decided. A claim can still "
+            "be held for something other than cover."
+        ),
+    }
+
+
 TOOL_IMPLS: dict[str, Any] = {
     "list_my_claims": list_my_claims,
     "explain_my_claim": explain_my_claim,
@@ -639,6 +795,8 @@ TOOL_IMPLS: dict[str, Any] = {
     "security_posture": security_posture,
     "verify_integrity": verify_integrity,
     "model_usage": model_usage,
+    "incident_detail": incident_detail,
+    "my_policy_cover": my_policy_cover,
 }
 
 

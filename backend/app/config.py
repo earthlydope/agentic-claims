@@ -236,17 +236,22 @@ THRESHOLDS = AutonomyThresholds()
 # Settlement authority by persona. A role with zero is not an oversight — an assessor
 # makes the technical call and an investigator works the network; neither decides the money.
 AUTHORITY_LIMITS_EUR = {
+    "policy_holder": 0.0,
+    "claim_handler": 5_000.0,
+    "motor_assessor": 0.0,
+    # Operations owns the escalated approval above handler authority. Compliance and
+    # Operations are one function here, and an approval is recorded as an Operations act.
+    "compliance_ops": 25_000.0,
+    "siu": 0.0,
+    # Older role names, kept so the gateway and the routing need no translation layer.
     "policyholder": 0.0,
     "claims_handler": 5_000.0,
-    "motor_assessor": 0.0,
-    "team_leader": 25_000.0,
-    "siu_investigator": 0.0,
-    "compliance_officer": 0.0,
-    # Older role names, kept so the gateway and the routing need no translation layer.
     "adjuster": 5_000.0,
+    "team_leader": 25_000.0,
     "supervisor": 25_000.0,
-    "siu": 0.0,
-    "compliance": 0.0,
+    "siu_investigator": 0.0,
+    "compliance_officer": 25_000.0,
+    "compliance": 25_000.0,
 }
 
 APPROVAL_TOKEN_TTL_SECONDS = int(os.environ.get("APPROVAL_TOKEN_TTL_SECONDS", "900"))

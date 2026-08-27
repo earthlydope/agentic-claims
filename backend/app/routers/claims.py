@@ -5,10 +5,13 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,6 +37,8 @@ from app.services.metrics import messages_for
 from app.services.ingest import ingest
 from app.services.preflight import preflight_upload, recovery_action, safe_link_check
 from app.zero_trust.semantic_gateway import PolicyAction, PromptFirewall, Surface
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/claims", tags=["claims"])
 
@@ -227,7 +232,25 @@ def get_claim(reference: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         ],
         "messages": messages_for(db, reference),
         "timeline": query_api.execute("get_claim_timeline", db=db, reference=reference)["data"],
+        # The trace of the last analysis, so opening a claim that was already worked shows
+        # what each stage found rather than an empty panel. The live stream replaces this
+        # while a run is in flight.
+        "trace": _last_trace(db, reference),
     }
+
+
+def _last_trace(db: Session, reference: str) -> list[dict[str, Any]]:
+    """The most recent recorded run on a claim, as trace events."""
+    from app.models import AgentRun
+
+    run = db.scalars(
+        select(AgentRun).where(AgentRun.claim_reference == reference)
+        .order_by(AgentRun.started_at.desc()).limit(1)
+    ).first()
+    if run is None:
+        return []
+    trace = run.trace
+    return trace if isinstance(trace, list) else []
 
 
 # --------------------------------------------------------------------------
@@ -264,7 +287,11 @@ class IntakeRequest(BaseModel):
 
 
 @router.post("/intake")
-def intake(body: IntakeRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def intake(
+    body: IntakeRequest,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """File a claim. Everything is screened before a model ever sees it."""
     policy = db.get(Policy, body.policy_number)
     if policy is None:
@@ -368,6 +395,10 @@ def intake(body: IntakeRequest, db: Session = Depends(get_db)) -> dict[str, Any]
             pass  # detections travel on the document, not as extracted fields
     db.commit()
 
+    # The customer has finished; the work starts now rather than when somebody asks.
+    if background is not None:
+        background.add_task(_auto_analyse, reference, user_id="policy.holder")
+
     return {
         "accepted": True,
         "reference": reference,
@@ -375,8 +406,62 @@ def intake(body: IntakeRequest, db: Session = Depends(get_db)) -> dict[str, Any]
         "evidence": evidence_report,
         "evidence_accepted": len(accepted),
         "evidence_submitted": len(body.evidence),
-        "next": f"/api/claims/{reference}/run",
+        "analysis": "started",
+        "next": f"/api/claims/{reference}/analysis-state",
     }
+
+
+# --------------------------------------------------------------------------
+# The guided notification
+# --------------------------------------------------------------------------
+class Turn(BaseModel):
+    question: str = ""
+    answer: str
+
+
+class GuidedRequest(BaseModel):
+    policy_number: str | None = None
+    answers: list[Turn] = []
+    language: str = "de"
+
+
+@router.post("/intake/question")
+async def intake_question(
+    body: GuidedRequest, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The next question to put to the customer, or the signal that enough is known.
+
+    The alternative to the form, not a wrapper around it: both routes end at the same
+    intake, and a customer can move between them without losing what they have said.
+    """
+    from app.services import questionnaire
+
+    product = ""
+    if body.policy_number:
+        policy = db.get(Policy, body.policy_number)
+        if policy is not None:
+            product = policy.product_label_en or policy.product
+
+    return await questionnaire.next_question(
+        answers=[t.model_dump() for t in body.answers],
+        language=body.language,
+        policy_product=product,
+    )
+
+
+@router.post("/intake/assemble")
+async def intake_assemble(body: GuidedRequest) -> dict[str, Any]:
+    """The structured notification the conversation produced.
+
+    Returned to the customer to confirm before it is filed, because a claim assembled from
+    a conversation should be shown back to the person whose conversation it was.
+    """
+    from app.services import questionnaire
+
+    return await questionnaire.assemble(
+        answers=[t.model_dump() for t in body.answers],
+        language=body.language,
+    )
 
 
 MAX_FILES = 12
@@ -396,6 +481,7 @@ async def intake_upload(
     injury_reported: bool = Form(False),
     third_party_involved: bool = Form(False),
     files: list[UploadFile] = File(default=[]),
+    background: BackgroundTasks = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """File a claim with real documents attached.
@@ -519,6 +605,10 @@ async def intake_upload(
             ))
     db.commit()
 
+    # The customer has finished; the work starts now rather than when somebody asks.
+    if background is not None:
+        background.add_task(_auto_analyse, reference, user_id="policy.holder")
+
     return {
         "accepted": True,
         "reference": reference,
@@ -547,7 +637,62 @@ async def intake_upload(
                 for f in accepted if f.quality_score < 0.55
             ],
         },
-        "next": f"/api/claims/{reference}/run",
+        "analysis": "started",
+        "next": f"/api/claims/{reference}/analysis-state",
+    }
+
+
+# --------------------------------------------------------------------------
+# Autonomous start
+# --------------------------------------------------------------------------
+_AUTO_RUNS: dict[str, str] = {}
+
+
+async def _auto_analyse(reference: str, *, user_id: str) -> None:
+    """Work a freshly notified claim without waiting to be asked.
+
+    A customer who has just described an accident and attached a quote has done their part;
+    making them press something afterwards is an artefact of how claims software was built,
+    not of how a claim works. So intake schedules this, it runs on its own session, and the
+    customer's next visit shows a claim that has already moved.
+
+    Failures are swallowed on purpose. The claim exists and is notified; if the analysis
+    could not complete, the file is simply still waiting for a person, which is the correct
+    resting state and exactly what the queues are for.
+    """
+    db = SessionLocal()
+    try:
+        _AUTO_RUNS[reference] = "running"
+        async for _ in run_claim(db, reference, user_id=user_id, persona="policy_holder"):
+            pass
+        _AUTO_RUNS[reference] = "done"
+    except Exception as exc:  # noqa: BLE001 — a failed analysis must not lose the claim
+        _AUTO_RUNS[reference] = f"failed: {type(exc).__name__}"
+        log.warning("autonomous analysis of %s did not complete: %s", reference, exc)
+    finally:
+        db.close()
+
+
+@router.get("/{reference}/analysis-state")
+def analysis_state(reference: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Whether the automatic analysis of this claim is still running.
+
+    The customer's view polls this so it can say "we are reading your documents" and then
+    stop saying it, without ever showing them a run, a stage list or an agent.
+    """
+    claim = db.get(Claim, reference)
+    if claim is None:
+        raise HTTPException(404, f"Claim {reference} not found.")
+    state = _AUTO_RUNS.get(reference)
+    # A claim that has left intake has been worked, whatever this process remembers —
+    # the server may have restarted since.
+    settled = claim.stage not in ("intake", "notify", "") and claim.stage is not None
+    return {
+        "reference": reference,
+        "working": state == "running" and not settled,
+        "state": state or ("done" if settled else "not_started"),
+        "stage": claim.stage,
+        "status": claim.status,
     }
 
 

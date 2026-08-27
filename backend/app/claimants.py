@@ -40,8 +40,9 @@ CUSTOMERS: list[dict[str, Any]] = [
             "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
-                {"code": "END-COURTESY-02",
-                 "label": "Mobilitätsgarantie — courtesy vehicle 14 days"},
+                {"code": "ZB-MOBIL",
+                 "label": "Mobilitätsgarantie — replacement vehicle up to 14 days",
+                 "label_de": "Mobilitätsgarantie — Ersatzfahrzeug bis 14 Tage"},
             ],
             "no_claims_years": 6, "protected_ncd": True,
         },
@@ -74,8 +75,9 @@ CUSTOMERS: list[dict[str, Any]] = [
             "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
-                {"code": "END-COURTESY-02",
-                 "label": "Mobilitätsgarantie — courtesy vehicle 14 days"},
+                {"code": "ZB-MOBIL",
+                 "label": "Mobilitätsgarantie — replacement vehicle up to 14 days",
+                 "label_de": "Mobilitätsgarantie — Ersatzfahrzeug bis 14 Tage"},
             ],
             "no_claims_years": 4, "protected_ncd": False,
         },
@@ -167,9 +169,14 @@ CUSTOMERS: list[dict[str, Any]] = [
             "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
-                {"code": "END-GAP-01", "label": "Neuwertersatz — new-for-old within 24 months"},
-                {"code": "END-COURTESY-02",
-                 "label": "Mobilitätsgarantie — courtesy vehicle 14 days"},
+                {"code": "ZB-NEUWERT",
+                 "label": "Neuwertersatz — new-for-old within 24 months of first "
+                          "registration",
+                 "label_de": "Neuwertersatz — Ersatz zum Neupreis innerhalb von 24 Monaten "
+                             "ab Erstzulassung"},
+                {"code": "ZB-MOBIL",
+                 "label": "Mobilitätsgarantie — replacement vehicle up to 14 days",
+                 "label_de": "Mobilitätsgarantie — Ersatzfahrzeug bis 14 Tage"},
             ],
             "no_claims_years": 5, "protected_ncd": True,
         },
@@ -239,7 +246,7 @@ SCENARIOS: list[dict[str, Any]] = [
         "key": "coverage_excluded", "title": "Honest 'not covered'",
         "party_id": "PTY-AT-100733",
         "headline": "Liability-only cover, claiming own-vehicle damage.",
-        "expect": "Coverage excluded on AKB-§7.2, routed to a coverage adjuster.",
+        "expect": "Coverage excluded on AKHB Art 8.2, routed to a coverage adjuster.",
         "demonstrates": [
             "The citation rule — no authoritative clause means no material answer",
             "PG-04 coverage certainty blocking an approval",

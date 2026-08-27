@@ -1,15 +1,23 @@
 # Agentic Motor Claims Platform
 
-Six roles, one platform. Eleven agents on a LangGraph orchestration, grounded on a governed
-semantic layer, wrapped in three zero-trust pillars — and an AI coworker for every persona.
-A working demonstration of the Allianz Austria target architecture.
+Five roles, one platform, in English or German. Eleven agents on a LangGraph orchestration,
+grounded on a governed semantic layer, wrapped in three zero-trust pillars — with an
+assistant docked on every screen. A working demonstration of the Allianz Austria target
+architecture.
 
-> **Agents recommend. Deterministic services decide. People approve.**
-> Nothing an agent produces reaches a core system directly.
+> **Automation recommends. Deterministic services decide. People approve.**
+> Nothing a model produces reaches a core system directly.
 
-Everything in this build is synthetic. The policyholders, vehicles, VINs, plates, policy
-numbers and the policy wording itself were written for this demonstration and correspond to
-no real person or document.
+**Nobody presses "run".** A claim is analysed the moment it is notified, and a file nobody
+has worked yet works itself when it is opened. The orchestration, the runtimes and the
+frameworks are not in the interface, because none of them are a user's concern.
+
+The policyholders, vehicles, VINs, plates and policy numbers are synthetic and correspond to
+no real person. The **policy conditions are not** — the clause corpus and the five policy
+schedules in `policy-documents/` are built from the published Austrian standard-form
+conditions (AKKB 2023, AKHB 2023, and the VAV AKKB variant), so a coverage answer rests on
+wording that actually exists. They remain a demonstration corpus, not any one insurer's
+contract.
 
 ---
 
@@ -35,10 +43,28 @@ controls still fire — only the reasoning turn is served deterministically.
 
 ---
 
-## Trying it with real documents
+## Trying it
 
-There is a pack of six synthetic documents in **`test-documents/`**, served by the API and
-loadable in one click from **Report an accident**. They are read for real — text extracted,
+Sign in as **Policy Holder**. Two things are worth doing first.
+
+**Open a policy.** *My policies* shows the vehicle rather than the policy number, because
+that is how a customer knows which policy they mean — what they are covered for with a tick,
+what they are not with a cross, and the actual schedule to view or download. Those five PDFs
+in `policy-documents/` are generated from the real Austrian conditions, one per policyholder.
+
+**Report a claim.** Three steps: pick the car, say what happened, attach anything you have.
+At step two you choose between **answering a few questions** and **filling in a form** —
+both routes end at the same intake, and you can switch between them without losing what you
+have said. The guided route asks one question at a time, chosen from what is genuinely still
+missing; it opens with "what happened?" without consulting a model, because that is the
+question everyone gets asked first. Four answers is typical. Then press submit once, and
+nothing else: the message says *we are reading your documents* and the analysis is already
+running.
+
+### The pack of test documents
+
+Six synthetic documents in **`test-documents/`**, served by the API and loadable in one click
+at step three. They are read for real — text extracted,
 panels found from the line items, each value scored for confidence — so the claim routes on
 what the *files* say rather than on what was typed.
 
@@ -63,78 +89,131 @@ plain-English guide, one section per role.
 
 ---
 
-## Six personas, six small products
+## Five roles, five small products
 
-The complaint that shaped this build was that everything was shown to everybody. It is not
-one console with seven tabs any more. Each role sees two to five views, and switching
-persona changes what the platform will *do*, not just what it displays.
+Everything used to be shown to everybody. It is not one console with seven tabs any more.
+Each role sees one to four views, and switching role changes what the platform will *do*,
+not just what it displays.
 
-The roles came from looking at how a European motor claims department is actually divided,
-which surfaced two the earlier build was missing.
+These are roles, not people. There are no invented staff names anywhere in the platform:
+what is being demonstrated is a separation of duties, and attaching a name to it only
+invites the question of who that person is. Each role carries a rendered 3D object rather
+than initials, because a role is not a person with a monogram.
 
-| | Persona | Sees | Authority | Why the role exists |
+| | Role | Sees | Authority | Why the role exists |
 |---|---|---|---|---|
-| **LH** | **Lena Hofer** — Policyholder<br>*Versicherungsnehmerin* | My claims · Report an accident · Coworker | — | Reports from her phone and wants to know where her claim is without ringing anyone. |
-| **KR** | **Klaus Reiter** — Claims Handler<br>*Sachbearbeiter Kfz-Schadenregulierung* | My desk · Recovery · Coworker | €5,000 | Owns the desk file: cover, routing, settling within authority, referrals, and finding a third party to recover from. |
-| **MG** | **Martin Gruber** — Motor Assessor<br>*Kfz-Sachverständiger* | Assessments · Coworker | none | Judges the damage, the repair scope, and whether the vehicle is worth repairing at all. Holds no settlement authority — the technical call and the money are separated deliberately. |
-| **IM** | **Ingrid Mayer** — Claims Team Leader<br>*Teamleiterin Schaden Kfz* | Approvals · Team · Coworker | €25,000 | Approves above handler authority, owns the SLA, and fixes where automation keeps stopping. |
-| **TW** | **Thomas Wagner** — Special Investigations<br>*Sonderermittlung* | Investigations · Coworker | none | Works referrals and the relationships behind them. Investigates; does not decide the money. |
-| **EP** | **Eva Pichler** — Compliance & Operational Risk | Zero trust · Evaluations · Model usage · Agents & data · Coworker | none | Reads the platform rather than the claims. Read-only everywhere by design. |
+| 🚗 | **Policy Holder**<br>*Versicherungsnehmer* | My claims · My policies · Report a claim | — | Reports an accident and follows their own claim. Never sees a stage, a queue or a model. |
+| 📁 | **Claim Handler**<br>*Sachbearbeiter Kfz-Schaden* | My work · Recovery | €5,000 | Owns the file: cover, settlement within authority, referrals, recovery. |
+| 🧰 | **Motor Assessor**<br>*Kfz-Sachverständiger* | Assessments | none | Judges the damage, the repair scope, and whether the vehicle is worth repairing. Holds no settlement authority — the technical call and the money are separated deliberately. |
+| 🔍 | **Special Investigations**<br>*Sonderermittlung* | Referrals | none | Works referrals and the relationships behind them. Reports signals; never decides the money. |
+| 🛡 | **Compliance & Operations**<br>*Compliance & Betrieb* | Approvals · Operations · Assurance · Assistant usage | €25,000 | Approves what is above handler authority, and reads the platform rather than the claims. |
 
 A role with zero authority is not an oversight. Separating the technical call from the
 settlement, and the investigation from the decision, is the control.
 
+**On the escalated approval.** With five roles rather than six, the approval above handler
+authority sits with Compliance & Operations, in its Operations capacity. The two halves stay
+visible — Operations owns the escalated approval, Compliance owns assurance — and the
+authority refusal is unchanged: a handler attempting €30,000 is refused at the gateway
+before anything is signed, and the refusal is what the demonstration is for.
+
 ---
 
-## An AI coworker per persona
+## English or German, from the top of the screen
 
-Every persona has one, and it is scoped exactly as they are. It is not a chatbot bolted on
-the side — it is another agent identity, governed like one:
+The toggle in the header changes the whole platform, not a label set: navigation, every
+view, claim statuses, cover and exclusion wording, routing reasons, money (`€ 1.234,56`) and
+dates (`28. Feb. 2027`). An Austrian browser opens in German without being asked.
+
+Business terms carry both languages from the API rather than being translated in the
+browser — a status is *Bei einem Mitarbeiter*, not a literal rendering of "with a person" —
+because those wordings are settled in the trade and a client-side table would drift from
+them.
+
+One deliberate boundary: the **narrative each agent writes** stays English. It is generated
+once and stored on the file, so it cannot follow a runtime toggle, and English is the
+platform's internal working language. Everything the platform itself renders — including
+every word a customer ever reads — follows the toggle. Customer letters are always written
+in the customer's own language regardless of who is looking.
+
+---
+
+## An assistant, docked on every screen
+
+Every role has one, bottom-right on every view, with sample questions for a standing start.
+It is a panel rather than a page because the question you want to ask is almost always about
+what is currently on the screen, and sending someone to a separate view to ask it loses the
+thing they were looking at.
+
+It is scoped exactly as the role is. Not a chatbot bolted on the side — another agent
+identity, governed like one:
 
 - its question goes through the **same inbound firewall** (ask it to ignore its
   instructions and the gateway stops it, exactly as it would a customer);
-- it can only reach **its persona's tools** — the handler's coworker cannot walk the fraud
+- it can only reach **its role's tools** — the handler's assistant cannot walk the fraud
   graph, and the investigator's cannot draft a customer note;
 - anything it says to a **customer** goes through the same **outbound guard**;
 - every exchange is recorded, with the tools it used and what it cost.
 
 What it will not do is act. It reads, explains, prepares and drafts. Approving, sending,
 settling and releasing a freeze stay with the person — those are the things the control
-plane exists to keep in human hands, and a coworker that could do them would be a hole in it.
+plane exists to keep in human hands, and an assistant that could do them would be a hole
+in it.
 
 | Coworker | For | Does |
 |---|---|---|
 | **Claim Assistant** | Policyholder | Where the claim is, in plain language, and exactly what is still needed. |
-| **Desk Assistant** | Claims Handler | What the cover says and on which clause, what stopped a claim, whether there is anyone to recover from. Drafts customer notes; does not send them. |
+| **Desk Assistant** | Claim Handler | What the cover says and on which clause, what stopped a claim, whether there is anyone to recover from. Drafts customer notes; does not send them. |
 | **Assessor Assistant** | Motor Assessor | Walks an estimate against the approved catalogue, and works the repair-cost-to-value test. |
-| **Supervisor Assistant** | Team Leader | Prepares an approval — what was proposed, which checks stopped it, what authority it needs — then shows where automation stops most. |
 | **Investigation Assistant** | Special Investigations | Lays out the signals and walks the network. Reports signals, never findings, and will say when a pattern is likely coincidence. |
-| **Assurance Assistant** | Compliance | What is enforced, what it stopped, whether anything changed out of band, and what it cost. |
+| **Assurance Assistant** | Compliance & Operations | Prepares an approval — what was proposed, which checks stopped it, what the exposure is — then reports what is enforced, what it stopped, whether anything changed out of band, and what it cost. |
+
+Every staff assistant can also read a claim **in full**: `incident_detail` returns the report
+as it came in, what was extracted from each document and how confident each field is, the
+reporting delay, and the reasoning every stage left behind. That is the tool a handler uses
+to interrogate an automated conclusion rather than accept it.
 
 ---
 
 ## Fifteen stages, and who owns each
 
-The earlier build stopped at the signed write. Four stages were missing that a claim
-genuinely cannot finish without.
+Nobody sees this table in the interface. It is here because it is the architecture; on screen
+a role sees only its own work, and the customer sees none of it.
 
 | | Stage | Owner | |
 |---|---|---|---|
 | 1 | Notify | Policyholder | |
 | 2 | Screen | Platform | Pillar 1 |
 | 3 | Read the evidence | Platform | Document Understanding |
-| 4 | Triage | Claims Handler | Intake Orchestrator |
-| 5 | Coverage | Claims Handler | Coverage |
+| 4 | Triage | Claim Handler | Intake Orchestrator |
+| 5 | Coverage | Claim Handler | Coverage |
 | 6 | Damage assessment | Motor Assessor | Damage Assessment |
 | 7 | Repair estimate | Motor Assessor | Pillar 2 · Repair Estimate |
-| 8 | **Repairability** | Motor Assessor | **new** — repair cost against replacement value (AKB-§11.2) |
+| 8 | **Repairability** | Motor Assessor | **new** — repair cost against replacement value (AKKB Art 5.1.1) |
 | 9 | Risk screening | Special Investigations | Fraud & Risk |
-| 10 | Decision | Claims Handler | Decision |
+| 10 | Decision | Claim Handler | Decision |
 | 11 | Policy guard | Platform | Pillar 1 · ten checks |
-| 12 | Human approval | Team Leader | HITL Coordinator |
-| 13 | **Settlement** | Claims Handler | **new** — Pillar 3 · the money actually moving |
-| 14 | **Recovery** | Claims Handler | **new** — third-party recovery, *Regress* |
-| 15 | **Close & learn** | Compliance | **new** — the file closed, the reason recorded |
+| 12 | Human approval | Compliance & Operations | HITL Coordinator |
+| 13 | **Settlement** | Claim Handler | **new** — Pillar 3 · the money actually moving |
+| 14 | **Recovery** | Claim Handler | **new** — third-party recovery, *Regress* |
+| 15 | **Close & learn** | Compliance & Operations | **new** — the file closed, the reason recorded |
+
+---
+
+## What was found, and how
+
+The file opens on **What was found** rather than a run console. Each stage shows its
+conclusion; the workings sit behind a **?** on the same row, which opens what went in (every
+tool called, with its arguments and what came back) and what came out (the typed result).
+The split is deliberate — somebody working a file wants the conclusion and needs to be able
+to challenge it, but not with a wall of JSON in front of the conclusion.
+
+Next to it is a **★**. It records whether the person who does this job thought the stage got
+it right, per claim, per stage, per role. That is not decoration and it is not a like button:
+whether the people doing the work trust a given stage is the only honest signal for where
+automation is actually earning its place, and a stage marked wrong is a golden case waiting
+to be written. A handler and an assessor can disagree on the same stage, and both verdicts
+are kept.
 
 ---
 
@@ -224,7 +303,7 @@ keep going when the first provider says no. That is why it is the fallback leg a
 default, and why the evaluation suite still runs deterministically — an eval whose expected
 values move with model sampling is not an eval. (On OpenRouter the same claim reaches the same
 `excluded` position, but returns the clause as
-`AKB-2026 §7.2 — own-vehicle damage excluded…` rather than the bare `AKB-§7.2` the golden case
+`AKHB Art 8.2 (own-vehicle damage excluded)` rather than the bare `AKHB Art 8.2` the golden case
 asserts.)
 
 Set `MODEL_PROVIDER` to `google`, `openrouter` or `fallback` to pin it; `auto` picks `fallback`
@@ -457,17 +536,27 @@ backend/
     semantic/      six semantic models, the query API, the clause corpus
     zero_trust/    semantic_gateway · sandbox · crypto_guard · write_gateway · adk_plugin
     services/      preflight · ledger · review · metrics · evals · security_ops
-    routers/       platform · claims · review · security · insights
-    models.py      canonical claim model
-    lifecycle.py   the fifteen stages and who owns each
+    routers/       platform · claims · workspace · review · security · insights
+    services/      …· ingest (pdf + photo) · questionnaire (the guided notification)
+    models.py      canonical claim model, plus per-role stage feedback
+    lifecycle.py   the fifteen stages, and every status in both languages
     schemas.py     the typed agent contracts
-    personas.py    six portal personas, their features and their coworkers
+    personas.py    the five roles, their views and their assistants
     claimants.py   five synthetic claimants and the demo scenarios
     seed.py        synthetic data
   tests/           64 zero-trust tests
 frontend/
-  src/views/       my claims · file a claim · work queue · coworker · team ·
-                   model usage · claim workbench · zero trust · agents · observability
+  src/lib/
+    i18n.tsx       the EN/DE dictionary, money and date formatting, the enum vocabulary
+  src/components/
+    Shell.tsx      sidebar · language toggle · role switcher
+    Avatar3D.tsx   the five roles as rendered isometric objects
+    CoworkerDock.tsx   the assistant, bottom-right on every screen
+    StageResults.tsx   what each stage found, the "?" workings and the "★" verdict
+  src/views/       my claims · my policies · report a claim · work queue ·
+                   operations · claim file · assurance · assistant usage
+policy-documents/  five policy schedules, one per policyholder, from the real conditions
+test-documents/    six documents that exercise the upload path
 ```
 
 ## Configuration

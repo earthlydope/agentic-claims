@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import pathlib
+import secrets
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,7 +18,9 @@ from app.claimants import CUSTOMERS, REPAIRERS, SCENARIOS
 from app.config import AUTHORITY_LIMITS_EUR
 from app.db import get_db
 from app.lifecycle import STATUSES, stage_dicts, stages_for, status_meta
-from app.models import Claim, CoworkerTurn, Estimate, ReviewTask
+from app.models import (
+    Claim, CoworkerTurn, Estimate, Policy, ReviewTask, StageFeedback, Vehicle,
+)
 from app.personas import (
     DEFAULT_PERSONA,
     FEATURES,
@@ -177,6 +181,9 @@ def _customer_card(claim: Claim, db: Session) -> dict[str, Any]:
         select(Estimate).where(Estimate.claim_reference == claim.reference)
         .order_by(Estimate.id.desc()).limit(1)
     ).first()
+    # The excess comes off whatever is paid, so a customer looking at an estimate needs it
+    # on the same card — an estimate without it reads as the amount they will receive.
+    policy = db.get(Policy, claim.policy_number)
     return {
         "reference": claim.reference,
         "status": status_meta(claim.status),
@@ -186,6 +193,7 @@ def _customer_card(claim: Claim, db: Session) -> dict[str, Any]:
         "decision": claim.decision,
         "settlement_amount_eur": claim.settlement_amount_eur or 0.0,
         "estimate_eur": estimate.total_cost if estimate else None,
+        "excess_eur": policy.excess_eur if policy else 0.0,
         "with_a_person": claim.status in ("in_review", "under_investigation",
                                           "total_loss_review"),
         "latest_message": (
@@ -254,4 +262,167 @@ def usage(days: int = 28, db: Session = Depends(get_db)) -> dict[str, Any]:
         "recent": llm_usage.recent_calls(db, 40),
         "daily": llm_usage.daily_series(db, days),
         "tracing": tracing.status(),
+    }
+
+# --------------------------------------------------------------------------
+# The policyholder's own file. Policies, their documents, and their claims.
+# --------------------------------------------------------------------------
+POLICY_DOCS = (
+    pathlib.Path(__file__).resolve().parent.parent.parent.parent / "policy-documents"
+)
+
+
+def _policy_document(policy_number: str) -> pathlib.Path | None:
+    """The schedule filed against a policy number, if one was issued."""
+    if not POLICY_DOCS.is_dir():
+        return None
+    # Schedules are named Polizze_<number>_<product>.pdf. Match on the number so the
+    # product wording can change without breaking the link.
+    safe = policy_number.replace("/", "").replace("..", "")
+    return next((p for p in sorted(POLICY_DOCS.glob("Polizze_*.pdf")) if safe in p.name), None)
+
+
+@router.get("/my-policies")
+def my_policies(
+    persona: str = DEFAULT_PERSONA,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """What this policyholder holds: cover, vehicle, excess and the schedule to open.
+
+    Scoped to the party the session is signed in as. A persona with no party holds no
+    policies, and this says so rather than falling back to somebody else's.
+    """
+    who = get_persona(persona)
+    if not who.party_id:
+        return {"party_id": None, "policies": [],
+                "note": "This role does not hold policies."}
+
+    rows = db.scalars(select(Policy).where(Policy.party_id == who.party_id)).all()
+    out: list[dict[str, Any]] = []
+    for pol in rows:
+        vehicle = db.scalars(select(Vehicle).where(Vehicle.vin == pol.vin)).first()
+        doc = _policy_document(pol.policy_number)
+        open_claims = db.scalars(
+            select(Claim).where(Claim.policy_number == pol.policy_number,
+                                Claim.closed_at.is_(None))
+        ).all()
+        out.append({
+            "policy_number": pol.policy_number,
+            "product": pol.product,
+            "product_label": pol.product_label_en,
+            "status": pol.status,
+            "inception_date": str(pol.inception_date) if pol.inception_date else None,
+            "renewal_date": str(pol.renewal_date) if pol.renewal_date else None,
+            "annual_premium_eur": pol.annual_premium_eur,
+            "excess_eur": pol.excess_eur,
+            "sum_insured_eur": pol.sum_insured_eur,
+            "covers": list(pol.covers or []),
+            "exclusions": list(pol.exclusions or []),
+            "endorsements": list(pol.endorsements or []),
+            "no_claims_years": pol.no_claims_years,
+            "protected_ncd": bool(pol.protected_ncd),
+            "vehicle": {
+                "vin": pol.vin,
+                "plate": vehicle.plate if vehicle else None,
+                "make": vehicle.make if vehicle else None,
+                "model": vehicle.model if vehicle else None,
+                "year": vehicle.year if vehicle else None,
+                "market_value_eur": vehicle.market_value_eur if vehicle else None,
+            },
+            "document": {
+                "filename": doc.name,
+                "size_bytes": doc.stat().st_size,
+                "url": f"/api/my-policies/{pol.policy_number}/document",
+            } if doc else None,
+            "open_claims": [c.reference for c in open_claims],
+            "can_claim": pol.status == "active",
+        })
+    return {"party_id": who.party_id, "count": len(out), "policies": out}
+
+
+@router.get("/my-policies/{policy_number}/document")
+def my_policy_document(
+    policy_number: str,
+    persona: str = DEFAULT_PERSONA,
+    db: Session = Depends(get_db),
+):
+    """The policy schedule as a PDF. Only for a policy this party actually holds."""
+    from fastapi.responses import FileResponse
+
+    who = get_persona(persona)
+    pol = db.get(Policy, policy_number)
+    # Ownership is checked before the file is found, so a guessed number leaks nothing
+    # about whether it exists.
+    if pol is None or not who.party_id or pol.party_id != who.party_id:
+        raise HTTPException(404, "No such policy on this account.")
+    doc = _policy_document(policy_number)
+    if doc is None:
+        raise HTTPException(404, "No schedule filed against this policy.")
+    return FileResponse(doc, media_type="application/pdf", filename=doc.name)
+
+
+# --------------------------------------------------------------------------
+# Was the stage right?
+# --------------------------------------------------------------------------
+class FeedbackRequest(BaseModel):
+    claim_reference: str
+    stage_id: str
+    agent: str = ""
+    persona: str = DEFAULT_PERSONA
+    helpful: bool
+    note: str = ""
+
+
+@router.post("/stage-feedback")
+def stage_feedback(
+    body: FeedbackRequest, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Record what a person thought of one stage's result.
+
+    Upserts on (claim, stage, role), because a person changing their mind is a correction,
+    not a second opinion.
+    """
+    existing = db.scalars(
+        select(StageFeedback).where(
+            StageFeedback.claim_reference == body.claim_reference,
+            StageFeedback.stage_id == body.stage_id,
+            StageFeedback.persona == body.persona,
+        )
+    ).first()
+
+    if existing is not None:
+        existing.helpful = body.helpful
+        existing.note = body.note or existing.note
+        existing.created_at = dt.datetime.now(dt.timezone.utc)
+        db.commit()
+        return {"recorded": True, "feedback_id": existing.feedback_id, "updated": True}
+
+    record = StageFeedback(
+        feedback_id=f"fb-{secrets.token_hex(5)}",
+        claim_reference=body.claim_reference,
+        stage_id=body.stage_id,
+        agent=body.agent,
+        persona=body.persona,
+        helpful=body.helpful,
+        note=body.note,
+    )
+    db.add(record)
+    db.commit()
+    return {"recorded": True, "feedback_id": record.feedback_id, "updated": False}
+
+
+@router.get("/stage-feedback/{reference}")
+def stage_feedback_for(
+    reference: str, persona: str = DEFAULT_PERSONA, db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """This role's own verdicts on a claim, so the stars come back where they were left."""
+    rows = db.scalars(
+        select(StageFeedback).where(
+            StageFeedback.claim_reference == reference,
+            StageFeedback.persona == persona,
+        )
+    ).all()
+    return {
+        "reference": reference,
+        "verdicts": {r.stage_id: {"helpful": r.helpful, "note": r.note} for r in rows},
     }

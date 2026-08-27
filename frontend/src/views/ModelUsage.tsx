@@ -4,12 +4,14 @@ import {
   Button, Card, Chip, Empty, ErrorNote, Meter, Mono, Notice, PageHeader, Segmented,
   Spinner, Stat, Table, Td,
 } from '../components/ui'
+import { useT } from '../lib/i18n'
 import { eur, ms, num, when } from '../lib/format'
 import type { Json } from '../types'
 
 type Window = '1' | '7' | '28'
 
 export function ModelUsage() {
+  const t = useT()
   const [data, setData] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [days, setDays] = useState<Window>('28')
@@ -41,8 +43,8 @@ export function ModelUsage() {
     <>
       <PageHeader
         eyebrow="Observe"
-        title="Model usage"
-        lede="What the platform consumed, what it cost per claim, and how much headroom is left before the provider starts refusing us."
+        title={t('mu.title')}
+        lede={t('mu.lede')}
         right={
           <>
             <Segmented

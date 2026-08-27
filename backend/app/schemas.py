@@ -80,6 +80,9 @@ class TriageResult(Strict):
     evidence_completeness: Confidence = 0.0
     missing: list[str] = []
     needs_confirmation: list[EvidenceGap] = []
+    # A file that could not be read is a different problem from a file that is absent: it
+    # needs one specific view re-taken, not a general request for more.
+    unreadable: list[EvidenceGap] = []
     customer_questions: list[str] = []
     injury_reported: bool = False
     suspicious_content: list[str] = []
@@ -163,7 +166,7 @@ class RepairEstimate(Strict):
 
 
 class RepairabilityVerdict(Strict):
-    """Total Loss — repair cost against replacement value (AKB-§11.2)."""
+    """Total Loss — repair cost against replacement value (AKKB Art 5.1.1)."""
 
     verdict: Literal["economically_repairable", "total_loss", "borderline"]
     repair_cost_eur: Eur = 0.0
@@ -213,7 +216,8 @@ class ReviewTaskCreated(Strict):
     """HITL Coordinator — the task, on the right queue at the right authority."""
 
     task_id: str = ""
-    queue: Literal["handler", "coverage", "assessment", "supervisor", "injury", "siu",
+    queue: Literal["handler", "coverage", "assessment", "operations", "supervisor",
+                   "injury", "siu",
                    "security"]
     authority_required: str = ""
     reason: str = ""

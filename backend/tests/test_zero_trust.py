@@ -95,7 +95,7 @@ def _package(**over: object) -> dict:
             "total_cost": 1_442.30, "total_labour": 823.60,
             "total_parts": 378.32, "total_tax": 240.38,
         },
-        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKB-§3.1"}]},
+        "coverage": {"status": "covered_with_excess", "citations": [{"clause_id": "AKKB Art 1.2"}]},
         "risk": {"score": 0.0},
         "evidence": {"missing": []},
     }
@@ -393,7 +393,7 @@ def test_an_approver_cannot_exceed_their_authority() -> None:
     with pytest.raises(PermissionError):
         gw.issue_approval(
             claim_id="T-1", action="claim.settlement.write", amount_eur=30_000.0,
-            approver_id="klaus.reiter", approver_role="adjuster",
+            approver_id="claim.handler", approver_role="claim_handler",
         )
 
 
@@ -401,12 +401,12 @@ def test_an_approval_cannot_be_reused_for_a_larger_amount() -> None:
     gw = SecureWriteGateway()
     token = gw.issue_approval(
         claim_id="T-1", action="claim.settlement.write", amount_eur=1_142.30,
-        approver_id="klaus.reiter", approver_role="adjuster",
+        approver_id="claim.handler", approver_role="claim_handler",
     )
     env = sign_action(
         payload={"claim_id": "T-1", "settlement_amount_eur": 4_900.00}, nonce=1,
         claim_id="T-1", run_id="r", step_id="s", agent_id="DecisionAgent",
-        action="claim.settlement.write", user_id="klaus.reiter",
+        action="claim.settlement.write", user_id="claim.handler",
         approval_ref=token.ref,
     ).as_dict()
     result = gw.submit(env, requires_approval=True)
@@ -418,7 +418,7 @@ def test_an_approval_is_consumed_once() -> None:
     gw = SecureWriteGateway()
     token = gw.issue_approval(
         claim_id="T-1", action="claim.settlement.write", amount_eur=1_000.0,
-        approver_id="ingrid.mayer", approver_role="supervisor",
+        approver_id="compliance.ops", approver_role="compliance_ops",
     )
 
     def env(nonce: int, note: str) -> dict:
@@ -426,7 +426,7 @@ def test_an_approval_is_consumed_once() -> None:
             payload={"claim_id": "T-1", "settlement_amount_eur": 1_000.0, "note": note},
             nonce=nonce, claim_id="T-1", run_id="r", step_id="s",
             agent_id="DecisionAgent", action="claim.settlement.write",
-            user_id="ingrid.mayer", approval_ref=token.ref,
+            user_id="compliance.ops", approval_ref=token.ref,
         ).as_dict()
 
     assert gw.submit(env(1, "first"), requires_approval=True).accepted

@@ -230,9 +230,10 @@ cannot be read, ask for one specific new view, not "better photos".
 
 {JSON_ONLY} Shape:
 {{"next_step": "request_information|re_ask_specific_view|confirm_low_confidence_reads|proceed_to_assessment",
-  "summary": str, "evidence": {{"completeness": float, "validated_fields": [str],
-  "missing": [str], "needs_confirmation": [object], "unreadable": [object]}},
-  "customer_questions": [str], "routing_hint": str, "injury_reported": bool}}
+  "summary": str, "evidence_completeness": float, "missing": [str],
+  "needs_confirmation": [{{"field_name": str, "read_as": str, "confidence": float, "ask": str}}],
+  "unreadable": [{{"field_name": str, "read_as": str, "confidence": float, "ask": str}}],
+  "customer_questions": [str], "injury_reported": bool, "suspicious_content": [str]}}
 """,
     "document_understanding": f"""
 You read document-processing output on an Austrian motor claim. You cannot change the claim.

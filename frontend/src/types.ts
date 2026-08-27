@@ -156,6 +156,8 @@ export interface Persona {
   measured_on: string[]
   party_id: string | null
   accent: string
+  /** Which 3D illustration represents this role. */
+  avatar: string
   features: PersonaFeature[]
   coworker: Coworker
 }
@@ -175,10 +177,14 @@ export interface Stage {
 export interface StatusMeta {
   key: string
   label: string
+  /** The Austrian wording, sent alongside the English rather than translated in the UI. */
+  label_de?: string
   stage: string | null
   tone: string
   terminal: boolean
   description: string
+  description_de?: string
+  [field: string]: unknown
 }
 
 export interface WorkTask {

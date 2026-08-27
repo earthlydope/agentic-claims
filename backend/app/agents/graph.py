@@ -79,6 +79,9 @@ class ClaimState(TypedDict, total=False):
     user_id: str
     runtime: str
     prompt: str
+    # Per-agent additions to the shared prompt, keyed by agent. Used where one stage needs
+    # something the others must not see — the message writer being told what to ask for.
+    prompt_addendum: dict[str, str]
 
     events: Annotated[list[dict[str, Any]], operator.add]
     outputs: Annotated[dict[str, Any], _merge]
@@ -170,8 +173,13 @@ def _agent_node(agent_key: str, stage_id: str):
                      detail=str(exc))
             return {"events": [], "halted": True, "halt_reason": str(exc)}
 
+        prompt = state["prompt"]
+        extra = state.get("prompt_addendum") or {}
+        if agent_key in extra:
+            prompt = f"{prompt}\n\n{extra[agent_key]}"
+
         result: ReasonResult = await reason(
-            agent_key, prompt=state["prompt"], runtime=state["runtime"], trace=trace,
+            agent_key, prompt=prompt, runtime=state["runtime"], trace=trace,
         )
 
         for call in result.tool_calls:
@@ -442,6 +450,14 @@ def _comms_node():
 
     async def node(state: ClaimState) -> dict[str, Any]:
         bus, ctx = _BUS.get(), _CTX.get()
+        # A "Request Information" letter that does not say what information is worse than
+        # no letter — the customer now knows something is wrong and cannot act on it. So
+        # the specific asks are put in front of the writer, taken from the decision and the
+        # triage rather than from the model's memory of the run.
+        state = {**state, "prompt_addendum": {
+            **(state.get("prompt_addendum") or {}),
+            "customer_communication": _what_to_ask_for(state),
+        }}
         out = await inner(state)
         payload = (out.get("outputs") or {}).get("customer_communication") or {}
         if payload:
@@ -466,6 +482,48 @@ def _comms_node():
 # --------------------------------------------------------------------------
 # Routing
 # --------------------------------------------------------------------------
+def _what_to_ask_for(state: ClaimState) -> str:
+    """The instruction the message writer needs when something is being requested."""
+    final = state.get("final") or {}
+    decision = str(final.get("decision") or "")
+    evidence = final.get("evidence") or {}
+    outputs = state.get("outputs") or {}
+
+    if decision != "Request Information":
+        return ""
+
+    asks: list[str] = []
+    asks.extend(str(q) for q in (evidence.get("questions") or []) if q)
+    asks.extend(str(m).replace("_", " ") for m in (evidence.get("missing") or []) if m)
+    for gap in (outputs.get("intake_orchestrator") or {}).get("needs_confirmation") or []:
+        if isinstance(gap, dict) and gap.get("ask"):
+            asks.append(str(gap["ask"]))
+    for gap in (outputs.get("intake_orchestrator") or {}).get("unreadable") or []:
+        if isinstance(gap, dict) and gap.get("ask"):
+            asks.append(str(gap["ask"]))
+
+    # The decision's own reasoning is the fallback, and often the only place the reason
+    # lives — a coverage condition the customer has not met is not "missing evidence".
+    reasoning = str((outputs.get("decision") or {}).get("reasoning") or "")
+
+    lines = [
+        "THIS CLAIM IS ASKING THE CUSTOMER FOR SOMETHING. The message must say plainly, "
+        "in one short paragraph, exactly what they need to send and why, and it must be "
+        "the first thing after the greeting. Do not write a generic 'we are reviewing "
+        "your claim' letter.",
+    ]
+    if asks:
+        lines.append("What to ask for, in the customer's own language:")
+        lines.extend(f"- {a}" for a in dict.fromkeys(asks))
+    if reasoning:
+        lines.append(f"Why it is needed (do not quote clause numbers to them): {reasoning}")
+    lines.append(
+        "Say how to send it and that the claim continues as soon as it arrives. Do not "
+        "quote any amount.",
+    )
+    return "\n".join(lines)
+
+
 def _after_screen(state: ClaimState) -> str:
     return "halt" if state.get("halted") else "continue"
 

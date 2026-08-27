@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 /* ── Layout ──────────────────────────────────────────────────────────── */
@@ -570,5 +571,73 @@ export function Select({
         </option>
       ))}
     </select>
+  )
+}
+
+
+/**
+ * Copy to clipboard, with the confirmation on the button itself.
+ *
+ * A message a handler is going to paste into their own mail client needs to leave here in
+ * one click, and the confirmation has to be where the eye already is — a toast in the
+ * corner is a confirmation nobody sees.
+ */
+export function CopyButton({
+  text,
+  label = 'Copy',
+  copiedLabel = 'Copied',
+  className = '',
+}: {
+  text: string
+  label?: string
+  copiedLabel?: string
+  className?: string
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Clipboard access is refused in some embedded contexts; the textarea route still
+      // works there and is worth keeping rather than failing silently.
+      const scratch = document.createElement('textarea')
+      scratch.value = text
+      scratch.setAttribute('readonly', '')
+      scratch.style.position = 'fixed'
+      scratch.style.opacity = '0'
+      document.body.appendChild(scratch)
+      scratch.select()
+      try {
+        document.execCommand('copy')
+      } catch {
+        /* nothing further to try */
+      }
+      document.body.removeChild(scratch)
+    }
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1800)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border
+                  text-[12px] transition-colors ${
+        copied
+          ? 'border-ok-600 text-ok-700 bg-ok-100'
+          : 'border-ink-200 text-ink-700 hover:bg-ink-50'
+      } ${className}`}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+           strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+        {copied
+          ? <path d="m4 12.5 5 5L20 6.5" />
+          : <><rect x="9" y="9" width="11" height="11" rx="2" />
+              <path d="M15 5H6a2 2 0 0 0-2 2v9" /></>}
+      </svg>
+      {copied ? copiedLabel : label}
+    </button>
   )
 }

@@ -48,6 +48,25 @@ export const api = {
   preflightLink: (url: string) => post('/preflight/link', { url }),
   reset: () => post('/admin/reset'),
   testDocuments: () => get('/test-documents'),
+  myPolicies: (persona: string) => get(`/my-policies?persona=${encodeURIComponent(persona)}`),
+  /** The next question in the guided notification, or the signal that enough is known. */
+  intakeQuestion: (
+    policy_number: string | null,
+    answers: { question: string; answer: string }[],
+    language: string,
+  ) => post('/claims/intake/question', { policy_number, answers, language }),
+  /** The structured notification the conversation produced. */
+  intakeAssemble: (answers: { question: string; answer: string }[], language: string) =>
+    post('/claims/intake/assemble', { answers, language }),
+  /** Whether the automatic analysis of a claim is still running. */
+  analysisState: (ref: string) => get(`/claims/${ref}/analysis-state`),
+  /** This role's own verdicts on a claim's stages. */
+  stageFeedback: (ref: string, persona: string) =>
+    get(`/stage-feedback/${ref}?persona=${encodeURIComponent(persona)}`),
+  rateStage: (body: {
+    claim_reference: string; stage_id: string; agent: string
+    persona: string; helpful: boolean; note?: string
+  }) => post('/stage-feedback', body),
   /** Fetch one sample document as a File, ready to attach. */
   fetchTestDocument: async (filename: string, mime: string) => {
     const res = await fetch(`${BASE}/test-documents/${encodeURIComponent(filename)}`)

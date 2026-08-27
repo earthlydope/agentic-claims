@@ -443,36 +443,62 @@ def create_review_task(
     import datetime as dt
     import secrets
 
+    from sqlalchemy import select
+
     from app.config import AUTHORITY_LIMITS_EUR
     from app.models import ReviewTask
 
     ctx = run_context()
     authority = (
-        "team_leader"
-        if proposed_amount_eur > AUTHORITY_LIMITS_EUR["claims_handler"]
-        else "claims_handler"
+        "compliance_ops"
+        if proposed_amount_eur > AUTHORITY_LIMITS_EUR["claim_handler"]
+        else "claim_handler"
     )
     if queue == "siu":
-        authority = "siu_investigator"
+        authority = "siu"
     elif queue == "assessment":
         authority = "motor_assessor"
 
-    task = ReviewTask(
-        task_id=f"TSK-{secrets.token_hex(4).upper()}",
-        claim_reference=ctx.claim_reference,
-        reason=reason,
-        reason_detail=reason_detail,
-        queue=queue,
-        authority_required=authority,
-        authority_limit_eur=AUTHORITY_LIMITS_EUR.get(authority, 0.0),
-        priority=1 if queue in ("siu", "injury") else 2,
-        status="open",
-        proposed_decision=proposed_decision,
-        proposed_amount_eur=round(float(proposed_amount_eur or 0.0), 2),
-        sla_due_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=24),
-    )
-    ctx.db.add(task)
-    ctx.db.commit()
+    # A claim re-worked is the same claim. If it is already open on this queue, the task is
+    # refreshed rather than duplicated — stacking three identical items on one person's desk
+    # is precisely the leakage this platform exists to remove, and the original SLA clock is
+    # kept because the claim has been waiting since it first arrived, not since the rerun.
+    existing = ctx.db.scalars(
+        select(ReviewTask).where(
+            ReviewTask.claim_reference == ctx.claim_reference,
+            ReviewTask.queue == queue,
+            ReviewTask.status == "open",
+        ).order_by(ReviewTask.created_at.asc())
+    ).first()
+
+    if existing is not None:
+        existing.reason = reason
+        existing.reason_detail = reason_detail
+        existing.authority_required = authority
+        existing.authority_limit_eur = AUTHORITY_LIMITS_EUR.get(authority, 0.0)
+        existing.proposed_decision = proposed_decision
+        existing.proposed_amount_eur = round(float(proposed_amount_eur or 0.0), 2)
+        ctx.db.commit()
+        task = existing
+        reused = True
+    else:
+        task = ReviewTask(
+            task_id=f"TSK-{secrets.token_hex(4).upper()}",
+            claim_reference=ctx.claim_reference,
+            reason=reason,
+            reason_detail=reason_detail,
+            queue=queue,
+            authority_required=authority,
+            authority_limit_eur=AUTHORITY_LIMITS_EUR.get(authority, 0.0),
+            priority=1 if queue in ("siu", "injury") else 2,
+            status="open",
+            proposed_decision=proposed_decision,
+            proposed_amount_eur=round(float(proposed_amount_eur or 0.0), 2),
+            sla_due_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=24),
+        )
+        ctx.db.add(task)
+        ctx.db.commit()
+        reused = False
 
     return {
         "data": {
@@ -480,7 +506,8 @@ def create_review_task(
             "queue": task.queue,
             "authority_required": task.authority_required,
             "authority_limit_eur": task.authority_limit_eur,
-            "sla_due_at": task.sla_due_at.isoformat(),
+            "sla_due_at": task.sla_due_at.isoformat() if task.sla_due_at else None,
+            "refreshed_existing": reused,
         },
         "provenance": {"semantic_model": "sm_review_queue"},
     }
@@ -565,7 +592,7 @@ def check_total_loss_threshold() -> dict[str, Any]:
     repair_cost = float(estimate.get("total_cost") or 0.0)
     replacement = float(valuation.get("replacement_value_eur") or 0.0)
 
-    threshold = 0.70          # AKB-§11.2
+    threshold = 0.70          # AKKB Art 5.1.1
     ratio = round(repair_cost / replacement, 4) if replacement else 0.0
 
     if not replacement or not repair_cost:
@@ -597,7 +624,7 @@ def check_total_loss_threshold() -> dict[str, Any]:
         },
         "provenance": {
             "semantic_model": "sm_damage_estimate",
-            "clause": "AKB-§11.2",
+            "clause": "AKKB Art 5.1.1",
             "note": "The threshold is policy wording, not a configurable setting.",
         },
     }
