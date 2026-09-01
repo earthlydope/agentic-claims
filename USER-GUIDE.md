@@ -101,6 +101,13 @@ nothing — that is allowed, and we will ask for what we need.
 Then press **Submit** once. That is the last thing you do. You get your claim number and the
 screen says *we are reading your documents* — the work has already started.
 
+### If we ask you for something
+
+The claim card says so in warning yellow and carries a **Send what we asked for** button.
+Add a note, a police reference, a photo — whatever we asked for — and press send. The claim
+picks up again on its own; you do not have to start a new one and you do not have to ring
+anyone. The card moves from *Waiting on you* to *Being assessed* while you watch.
+
 If we do need something, the message says exactly what, why, and how to send it. Not "please
 provide further documentation", but *"please send us the police report for your parking
 damage of 25.08.2026 — you can upload it in the portal or email it to us"*.
@@ -132,8 +139,14 @@ Click one. The right-hand side gives you the whole file:
 - **Estimate** — parts, labour, VAT, and whether the total sits inside the normal band.
 - **Risk** — a score against a 0.55 threshold, with the reason for each signal.
 
-Then **Decision**. Four buttons: **Approve**, **Approve a different amount**, **Ask for
-more**, **Reject**. Add a note — it goes on the file permanently.
+Then **Decision**. **Approve**, **Approve a different amount**, **Ask for more**,
+**Reject**. Add a note — it goes on the file permanently.
+
+Two things to know about who may do what. **Declining a claim needs settlement authority**,
+even though it pays nothing — it is the most consequential outcome on a file. And recording
+a *finding* does not: an assessor confirming a total loss and an investigator releasing a
+claim move no money, so neither needs authority for it. Every finding hands the file to
+whoever is next, with the finding attached and the original clock still running.
 
 **If it is above €5,000** you will be told before you press anything. Pressing Approve is
 refused at the gateway, and nothing is signed. It goes to Compliance & Operations.
@@ -161,7 +174,9 @@ stage recorded.
 
 ### Recovery
 
-Claims that have settled where somebody else may owe us. The platform works out whether
+Claims that have **settled** where somebody else may owe us — a separate list from your
+desk, not the same one under a different heading. A claim lands here when it has been paid
+and a third party was involved. The platform works out whether
 there is a third party, whether they were at fault, and whether the amount is worth your
 time. It includes **your customer's excess** — they are out of pocket until it comes back.
 
@@ -214,6 +229,10 @@ addresses and repairers connected to this claim, with anything already flagged m
 
 > **These are signals, not findings.** A claim on your desk is **frozen, not declined**. The
 > evidence trail is preserved. Your job is to release it or refer it on.
+
+**Release** is the button you will use most: it records that nothing was established and
+sends the claim back to the handler to be paid. You cannot decline a claim — that needs
+settlement authority and it is not your decision.
 
 Your assistant will tell you when a pattern is more likely coincidence. That is deliberate —
 a tool that only ever agrees with you is not helping.

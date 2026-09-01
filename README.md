@@ -84,7 +84,7 @@ digit a real system would verify, so it is penalised far less. Photo quality is 
 of the edge response plus exposure and resolution, because a sharp photo taken in the dark is
 just as unusable as a soft one.
 
-`test-documents/README.md` has five worked scenarios. **`USER-GUIDE.md`** is the
+`test-documents/README.md` has the worked scenarios. **`USER-GUIDE.md`** is the
 plain-English guide, one section per role.
 
 ---
@@ -189,7 +189,7 @@ a role sees only its own work, and the customer sees none of it.
 | 5 | Coverage | Claim Handler | Coverage |
 | 6 | Damage assessment | Motor Assessor | Damage Assessment |
 | 7 | Repair estimate | Motor Assessor | Pillar 2 · Repair Estimate |
-| 8 | **Repairability** | Motor Assessor | **new** — repair cost against replacement value (AKKB Art 5.1.1) |
+| 8 | **Repairability** | Motor Assessor | **new** — AKKB Art 5.1.1, both limbs (see below) |
 | 9 | Risk screening | Special Investigations | Fraud & Risk |
 | 10 | Decision | Claim Handler | Decision |
 | 11 | Policy guard | Platform | Pillar 1 · ten checks |
@@ -197,6 +197,45 @@ a role sees only its own work, and the customer sees none of it.
 | 13 | **Settlement** | Claim Handler | **new** — Pillar 3 · the money actually moving |
 | 14 | **Recovery** | Claim Handler | **new** — third-party recovery, *Regress* |
 | 15 | **Close & learn** | Compliance & Operations | **new** — the file closed, the reason recorded |
+
+---
+
+## The total-loss test, in full
+
+Worth stating because it is the part most easily got wrong, and this build got it wrong
+first. **AKKB 2023 Art 5.1.1 sets two rules, and they are different rules.**
+
+> *"…oder die voraussichtlichen Wiederherstellungskosten **zuzüglich der Restwerte** den
+> Wiederbeschaffungswert übersteigen. Der Versicherungsnehmer **kann jedoch** die
+> Reparaturkosten verlangen, sofern diese voraussichtlich 70 Prozent des
+> Wiederbeschaffungswertes nicht übersteigen … **zum Nachweis ist eine Rechnung der
+> Fachwerkstätte vorzulegen.**"*
+
+**Rule 1 is the test.** A total loss exists where the vehicle is destroyed or lost, or
+where repair cost *plus salvage* exceeds the replacement value — the Wiederbeschaffungs-
+aufwand.
+
+**Rule 2 is the policyholder's option.** They may demand the repair cost instead, provided
+it is not expected to exceed 70 per cent of the replacement value, that a proper repair at
+that figure is genuinely possible, and that a qualified workshop invoice is produced as
+proof.
+
+Running rule 2's percentage as though it were rule 1's test inverts it: 70 per cent is the
+customer's entitlement threshold to insist on repair, not the insurer's trigger to declare
+a write-off. So the platform now reports three outcomes:
+
+| Outcome | When | Indemnity |
+|---|---|---|
+| `total_loss` · recovery cost exceeds value | repair + salvage > WBW | WBW − salvage − excess |
+| `total_loss` · above the repair option | repair > 70% of WBW | WBW − salvage − excess |
+| `economically_repairable` | repair ≤ 70% of WBW | repair cost − excess, on an invoice |
+
+Salvage varies with the damage rather than sitting at a constant — an intact drivetrain and
+a structurally destroyed shell are not the same fraction of anything — and the provenance
+says plainly that it is modelled where a real file uses Restwertbörse bids.
+
+Where the schedule carries **ZB-NEUWERT** and the vehicle is inside the endorsement's
+window, the basis is the new price rather than the replacement value.
 
 ---
 
@@ -542,7 +581,7 @@ backend/
     lifecycle.py   the fifteen stages, and every status in both languages
     schemas.py     the typed agent contracts
     personas.py    the five roles, their views and their assistants
-    claimants.py   five synthetic claimants and the demo scenarios
+    claimants.py   six synthetic claimants and the demo scenarios
     seed.py        synthetic data
   tests/           64 zero-trust tests
 frontend/
