@@ -28,13 +28,34 @@ from app.zero_trust.write_gateway import gateway
 # outcome in real SIU work — while both could decline a claim outright, because the
 # authority check only ever guarded approvals.
 MONEY_DECISIONS = ("approve", "amend")
-FINDING_DECISIONS = ("confirm", "release", "refer", "request_more")
+FINDING_DECISIONS = ("confirm", "release", "refer", "request_more",
+                     "recovered", "no_recovery")
 ADVERSE_DECISIONS = ("reject",)
 DECISIONS = MONEY_DECISIONS + ADVERSE_DECISIONS + FINDING_DECISIONS
 
 # Declining a claim is the most consequential outcome on a file and is not a technical
 # finding. It needs settlement authority even though it pays nothing.
 DECLINE_REQUIRES_AUTHORITY = True
+
+# Which verbs each queue accepts. A task is not a generic decision slot: a recovery task
+# is a question about pursuing a third party, not a second chance to settle the claim, and
+# treating it as one wrote a second signed settlement against a claim already paid.
+QUEUE_VERBS: dict[str, tuple[str, ...]] = {
+    "handler":     ("approve", "amend", "reject", "request_more", "refer"),
+    "coverage":    ("approve", "amend", "reject", "request_more", "refer"),
+    "operations":  ("approve", "amend", "reject", "request_more", "refer"),
+    "large_loss":  ("approve", "amend", "reject", "request_more", "refer"),
+    "injury":      ("approve", "amend", "reject", "request_more", "refer"),
+    # The assessor gives a technical opinion and never settles.
+    "assessment":  ("confirm", "reject", "request_more"),
+    # The investigator reports signals and releases or refers; never decides the money.
+    "siu":         ("release", "refer", "request_more"),
+    # Recovery is about the counterparty, not about paying the insured again.
+    "recovery":    ("recovered", "no_recovery", "request_more"),
+    "security":    ("release", "refer", "request_more"),
+}
+
+RECOVERY_DECISIONS = ("recovered", "no_recovery")
 
 
 class ReviewError(RuntimeError):
@@ -269,6 +290,20 @@ def decide(
     if staff is None:
         raise ReviewError(f"'{user_id}' is not a known user.")
 
+    # The verb has to belong to the queue, and the queue has to belong to the role. Neither
+    # was checked, so any role could use any verb on any task — including settling a claim
+    # a second time from its own recovery task.
+    allowed = QUEUE_VERBS.get(task.queue)
+    if allowed is not None and decision not in allowed:
+        raise ReviewError(
+            f"'{decision}' is not an outcome the {task.queue} queue accepts. "
+            f"It accepts: {', '.join(allowed)}."
+        )
+    if task.queue not in set(staff.get("queues") or ()):
+        raise ReviewError(
+            f"{staff['role_label']} does not work the '{task.queue}' queue."
+        )
+
     claim = db.get(Claim, task.claim_reference)
     if claim is None:
         raise ReviewError(f"Claim {task.claim_reference} not found.")
@@ -300,6 +335,24 @@ def decide(
             "reason": "insufficient_authority_to_decline",
             "required_authority_eur": 0.01,
             "your_authority_eur": authority,
+            "steps": steps,
+        }
+
+    # A claim that has already been settled is not settled again from another task. The
+    # write gateway's idempotency is per action envelope, so a fresh nonce and a fresh
+    # approval sail through it — the guard has to be here, on the claim's own state.
+    if decision in MONEY_DECISIONS and float(claim.settlement_amount_eur or 0.0) > 0.0:
+        steps.append({
+            "step": "already_settled", "passed": False,
+            "detail": (
+                f"{claim.reference} has already been settled at "
+                f"EUR {claim.settlement_amount_eur:,.2f}. A further payment is a "
+                "supplementary claim, not a second approval of this one."
+            ),
+        })
+        return {
+            "accepted": False,
+            "reason": "claim_already_settled",
             "steps": steps,
         }
 
@@ -453,6 +506,23 @@ def decide(
             "detail": "Declined by a named person, with the reason recorded on the claim.",
         })
 
+    elif decision in RECOVERY_DECISIONS:
+        # Recovery closes on the recovery, not on the claim. Without a counterparty record
+        # the platform cannot say who was pursued or what came back — that gap is real and
+        # unclosed — but the file stops being open work either way.
+        claim.status = "closed" if decision == "no_recovery" else "recovery_open"
+        if decision == "no_recovery":
+            claim.stage = "closed"
+            claim.closed_at = claim.closed_at or dt.datetime.now(dt.timezone.utc)
+        steps.append({
+            "step": "record_recovery_outcome", "passed": True,
+            "detail": (
+                f"{staff['role_label']} recorded the recovery as "
+                + ("pursued and open." if decision == "recovered"
+                   else "not worth pursuing; the file is closed.")
+            ),
+        })
+
     elif decision in ("confirm", "release", "refer"):
         # A finding is a hand-off, not an ending. Resolving the task without raising the
         # next one would leave the claim carrying a queue label with nothing on anybody's
@@ -501,6 +571,8 @@ def decide(
         "confirm": "Technical position confirmed",
         "release": "Released — no finding established",
         "refer": "Referred for investigation",
+        "recovered": "Recovery being pursued",
+        "no_recovery": "No recovery worth pursuing",
     }.get(decision, decision.replace("_", " ").capitalize())
     task.decision_note = note
     task.resolved_by = user_id
@@ -533,6 +605,20 @@ def assign(db: Session, task_id: str, user_id: str) -> dict[str, Any]:
     staff = staff_by_id(user_id)
     if staff is None:
         raise ReviewError(f"'{user_id}' is not a known user.")
+
+    # The verb has to belong to the queue, and the queue has to belong to the role. Neither
+    # was checked, so any role could use any verb on any task — including settling a claim
+    # a second time from its own recovery task.
+    allowed = QUEUE_VERBS.get(task.queue)
+    if allowed is not None and decision not in allowed:
+        raise ReviewError(
+            f"'{decision}' is not an outcome the {task.queue} queue accepts. "
+            f"It accepts: {', '.join(allowed)}."
+        )
+    if task.queue not in set(staff.get("queues") or ()):
+        raise ReviewError(
+            f"{staff['role_label']} does not work the '{task.queue}' queue."
+        )
     if task.queue not in staff["queues"]:
         raise ReviewError(
             f"{staff['name']} does not work the {task.queue} queue "

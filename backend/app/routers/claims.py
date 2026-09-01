@@ -694,7 +694,11 @@ async def add_documents(
     existing = db.scalars(
         select(Document).where(Document.claim_reference == reference)
     ).all()
-    known_hashes = {d.sha256 for d in existing if d.sha256}
+    # A map, not a set: preflight reports *which* document a duplicate matches, so the
+    # customer can be told they have already sent it rather than silently ignored.
+    known_hashes: dict[str, str] = {
+        d.sha256: (d.filename or d.doc_id) for d in existing if d.sha256
+    }
     start_index = len(existing)
 
     payloads: list[tuple[str, bytes, str]] = []
@@ -712,7 +716,7 @@ async def add_documents(
     ]
     for item in ingested:
         if item.sha256:
-            known_hashes.add(item.sha256)
+            known_hashes.setdefault(item.sha256, item.filename or "upload")
     accepted = [f for f in ingested if not (f.preflight or {}).get("duplicate_of")]
 
     now = dt.datetime.now(dt.timezone.utc)
