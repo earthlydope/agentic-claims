@@ -75,6 +75,16 @@ const DICT: Record<string, [string, string]> = {
   'claims.weNeed': ['We still need', 'Wir benötigen noch'],
   'claims.nothingNeeded': ['Nothing — we have what we need.',
                            'Nichts — wir haben alles, was wir brauchen.'],
+  'claims.send': ['Send what we asked for', 'Gewünschte Unterlagen senden'],
+  'claims.sendHint': ['Add the document or answer we asked for, and we carry on from there.',
+                      'Fügen Sie die angeforderte Unterlage oder Antwort hinzu — wir machen '
+                      + 'dann weiter.'],
+  'claims.yourAnswer': ['Anything you want to tell us', 'Was Sie uns mitteilen möchten'],
+  'claims.policeRef': ['Police reference, if you have one', 'Aktenzahl der Polizei, falls vorhanden'],
+  'claims.sending': ['Sending…', 'Wird gesendet…'],
+  'claims.sent': ['Thank you — we have it and we are carrying on.',
+                  'Danke — wir haben es erhalten und machen weiter.'],
+  'claims.cancel': ['Cancel', 'Abbrechen'],
   'claims.viewDetail': ['Open', 'Öffnen'],
 
   // ── my policies ───────────────────────────────────────────────────

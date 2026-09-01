@@ -58,6 +58,21 @@ export const api = {
   /** The structured notification the conversation produced. */
   intakeAssemble: (answers: { question: string; answer: string }[], language: string) =>
     post('/claims/intake/assemble', { answers, language }),
+  /** Send documents or an answer to a claim that is already open. */
+  addDocuments: async (ref: string, form: FormData) => {
+    const res = await fetch(`${BASE}/claims/${ref}/documents`, { method: 'POST', body: form })
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const body = await res.json()
+        detail = body.detail ?? JSON.stringify(body)
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(`${res.status} ${detail}`)
+    }
+    return res.json() as Promise<Json>
+  },
   /** Whether the automatic analysis of a claim is still running. */
   analysisState: (ref: string) => get(`/claims/${ref}/analysis-state`),
   /** This role's own verdicts on a claim's stages. */

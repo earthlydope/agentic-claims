@@ -93,6 +93,7 @@ export function MyClaims({
   const de = lang === 'de'
   const [data, setData] = useState<Json | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [replyingTo, setReplyingTo] = useState<string | null>(null)
 
   const load = useCallback(() => {
     api.work(persona.key).then(setData).catch((e: Error) => setError(e.message))
@@ -173,7 +174,32 @@ export function MyClaims({
                 {t('claims.whatNext')}
               </div>
               <p className="text-[13.5px] text-ink-800 mt-1 leading-relaxed">{step.text}</p>
+              {step.act && (
+                <button
+                  type="button"
+                  onClick={() => setReplyingTo(
+                    replyingTo === c.reference ? null : (c.reference as string),
+                  )}
+                  className="mt-2.5 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full
+                             bg-warn-700 text-white text-[12.5px] hover:opacity-90
+                             transition-opacity"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+                       strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 19h16" />
+                  </svg>
+                  {t('claims.send')}
+                </button>
+              )}
             </div>
+
+            {replyingTo === c.reference && (
+              <ReplyForm
+                reference={c.reference as string}
+                onDone={() => { setReplyingTo(null); load() }}
+                onCancel={() => setReplyingTo(null)}
+              />
+            )}
 
             {/* ── the money, only once there is a figure worth showing ── */}
             {(settled || (c.estimate_eur as number) > 0) && (
@@ -249,6 +275,136 @@ export function MyClaims({
           : 'Nothing here is decided by a machine alone. Any decision that affects what you '
             + 'are paid is confirmed by a person, and you can ask for one at any point.'}
       </Notice>
+    </div>
+  )
+}
+
+
+/**
+ * Answering a request for information, from the card that is waiting on it.
+ *
+ * This is the loop the platform previously could not close: it would ask a customer for a
+ * police report and the only upload route created a new claim, so the honest answer to
+ * "how do I send this?" was that they could not. The claim carries on by itself once the
+ * evidence lands.
+ */
+function ReplyForm({
+  reference, onDone, onCancel,
+}: {
+  reference: string
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const t = useT()
+  const [note, setNote] = useState('')
+  const [policeRef, setPoliceRef] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const send = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.set('note', note)
+      form.set('police_report_ref', policeRef)
+      for (const f of files) form.append('files', f)
+      const result = (await api.addDocuments(reference, form)) as Json
+      if (result.accepted === false) {
+        setError(String(result.reason ?? 'That was not accepted.'))
+        return
+      }
+      setSent(true)
+      window.setTimeout(onDone, 1600)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (sent) {
+    return (
+      <div className="mt-3 rounded-2xl bg-ok-100 px-4 py-3.5 text-[13.5px] text-ok-700">
+        {t('claims.sent')}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 rounded-2xl border border-ink-200 px-4 py-4">
+      <p className="text-[12.5px] text-ink-600 mb-3">{t('claims.sendHint')}</p>
+
+      <label className="block text-[12.5px] text-ink-700 mb-1.5">
+        {t('claims.yourAnswer')}
+      </label>
+      <textarea
+        rows={3}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        className="w-full rounded-2xl border border-ink-200 px-4 py-3 text-[13px]
+                   text-ink-900 outline-none focus:border-az-500 resize-y leading-relaxed"
+      />
+
+      <label className="block text-[12.5px] text-ink-700 mt-3 mb-1.5">
+        {t('claims.policeRef')}
+      </label>
+      <input
+        value={policeRef}
+        onChange={(e) => setPoliceRef(e.target.value)}
+        placeholder="LPD-W-2026-…"
+        className="w-full rounded-full border border-ink-200 px-4 py-2.5 text-[13px]
+                   outline-none focus:border-az-500 placeholder:text-ink-400"
+      />
+
+      <label className="inline-flex items-center gap-2 mt-3 px-3.5 py-2 rounded-full
+                        border border-ink-200 text-[12.5px] text-ink-700 cursor-pointer
+                        hover:bg-ink-50">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+             strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+          <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 19h16" />
+        </svg>
+        {t('file.browse')}
+        <input
+          type="file"
+          multiple
+          accept="application/pdf,image/*"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) setFiles(Array.from(e.target.files).slice(0, 12))
+          }}
+        />
+      </label>
+      {!!files.length && (
+        <ul className="mt-2 space-y-1">
+          {files.map((f) => (
+            <li key={f.name} className="text-[12px] text-ink-600">
+              {f.name} · {(f.size / 1024).toFixed(0)} KB
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error && (
+        <p className="mt-3 text-[12.5px] text-stop-700 bg-stop-100 rounded-xl px-3 py-2">
+          {error}
+        </p>
+      )}
+
+      <div className="mt-4 flex items-center gap-2.5">
+        <Button
+          onClick={() => void send()}
+          disabled={busy || (!note.trim() && !policeRef.trim() && files.length === 0)}
+        >
+          {busy ? t('claims.sending') : t('claims.send')}
+        </Button>
+        <button type="button" onClick={onCancel}
+                className="text-[12.5px] text-ink-500 hover:text-ink-800">
+          {t('claims.cancel')}
+        </button>
+      </div>
     </div>
   )
 }

@@ -643,6 +643,131 @@ async def intake_upload(
 
 
 # --------------------------------------------------------------------------
+# Responding to a request for information
+# --------------------------------------------------------------------------
+@router.post("/{reference}/documents")
+async def add_documents(
+    reference: str,
+    note: str = Form(""),
+    police_report_ref: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+    background: BackgroundTasks = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Add documents, or an answer, to a claim that is already open.
+
+    Without this the platform could ask a customer for a police report and give them no
+    way to send one: the only upload route created a *new* claim, so a customer answering
+    a request for information would have opened a second claim instead of completing the
+    first. "Waiting on the customer" was a state nobody could leave.
+
+    Everything the intake route does applies here too — the note is screened before it is
+    stored, every file is preflighted, and the analysis restarts on its own once the new
+    evidence is in, because the reason the claim was waiting may now be gone.
+    """
+    claim = db.get(Claim, reference)
+    if claim is None:
+        raise HTTPException(404, f"Claim {reference} not found.")
+    if claim.closed_at is not None:
+        raise HTTPException(
+            409,
+            "This claim is closed. Reopening a settled claim is a separate decision.",
+        )
+    if len(files) > MAX_FILES:
+        raise HTTPException(413, f"At most {MAX_FILES} files at a time.")
+
+    # The customer's words are screened before anything is written, exactly as at intake.
+    if note.strip():
+        fw = PromptFirewall.inspect(note, Surface.USER_MESSAGE)
+        if fw.action is PolicyAction.BLOCK:
+            return {
+                "accepted": False,
+                "reason": "blocked_at_the_gateway",
+                "firewall": fw.as_dict(),
+            }
+
+    existing = db.scalars(
+        select(Document).where(Document.claim_reference == reference)
+    ).all()
+    known_hashes = {d.sha256 for d in existing if d.sha256}
+    start_index = len(existing)
+
+    payloads: list[tuple[str, bytes, str]] = []
+    total = 0
+    for upload in files:
+        raw = await upload.read()
+        total += len(raw)
+        if total > MAX_TOTAL_BYTES:
+            raise HTTPException(413, "The batch is larger than the per-claim limit.")
+        payloads.append((upload.filename or "upload", raw, upload.content_type or ""))
+
+    ingested = [
+        ingest(filename=name, payload=raw, mime_type=mime, known_hashes=known_hashes)
+        for name, raw, mime in payloads
+    ]
+    for item in ingested:
+        if item.sha256:
+            known_hashes.add(item.sha256)
+    accepted = [f for f in ingested if not (f.preflight or {}).get("duplicate_of")]
+
+    now = dt.datetime.now(dt.timezone.utc)
+    for offset, f in enumerate(accepted, start=1):
+        doc_id = f"{reference}-DOC{start_index + offset:02d}"
+        db.add(Document(
+            doc_id=doc_id,
+            claim_reference=reference,
+            kind=f.kind,
+            filename=f.filename,
+            mime_type=f.mime_type,
+            size_bytes=f.size_bytes,
+            page_count=f.page_count,
+            sha256=f.sha256,
+            doc_type=f.doc_type,
+            quality_score=f.quality_score,
+            ocr_text=f.text or None,
+            detections=f.detections,
+            preflight_notes=f.notes,
+            duplicate_of=(f.preflight or {}).get("duplicate_of"),
+            uploaded_at=now + dt.timedelta(seconds=offset),
+        ))
+        for field in f.fields:
+            db.add(ExtractedField(
+                doc_id=doc_id,
+                field_name=field["field_name"],
+                extracted_value=field["extracted_value"],
+                validated_value=field["validated_value"],
+                confidence=field["confidence"],
+                recovery_action=field["recovery_action"],
+                page=1,
+            ))
+
+    if police_report_ref.strip():
+        claim.police_report_ref = police_report_ref.strip()
+    if note.strip():
+        claim.fnol_text = f"{claim.fnol_text}\n\n[Nachtrag] {note.strip()}"
+
+    # The claim is no longer waiting on the customer, whatever it was waiting for.
+    if claim.status == "awaiting_customer":
+        claim.status = "assessing"
+        claim.stage = "triage"
+    db.commit()
+
+    if background is not None:
+        background.add_task(_auto_analyse, reference, user_id="policy.holder")
+
+    return {
+        "accepted": True,
+        "reference": reference,
+        "documents_added": len(accepted),
+        "duplicates_ignored": len(ingested) - len(accepted),
+        "files": [f.as_dict() for f in ingested],
+        "police_report_ref": claim.police_report_ref,
+        "analysis": "restarted",
+        "next": f"/api/claims/{reference}/analysis-state",
+    }
+
+
+# --------------------------------------------------------------------------
 # Autonomous start
 # --------------------------------------------------------------------------
 _AUTO_RUNS: dict[str, str] = {}
