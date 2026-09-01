@@ -478,6 +478,22 @@ def decide(
             "detail": "Further information requested from the customer.",
         })
 
+    # A write the gateway refused is not an approval. Resolving the task and recording
+    # "Approved" against it regardless would put an outcome on the audit trail that never
+    # happened — and leave the claim with no open task, so nobody would ever come back to
+    # it. The task stays open and the refusal is on the file.
+    if decision in MONEY_DECISIONS and write_result is not None and not write_result.get("accepted", True):
+        task.decision_note = (
+            f"{note} — write refused at the gateway: "
+            f"{write_result.get('reason', 'unknown')}"
+        ).strip(" —")
+        db.commit()
+        return {
+            "accepted": False,
+            "reason": "refused_at_the_write_gateway",
+            "steps": steps,
+        }
+
     task.status = "resolved"
     task.decision = {
         "approve": "Approved", "amend": "Approved (amended)",
