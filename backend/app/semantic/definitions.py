@@ -178,6 +178,79 @@ REASONABLENESS_BANDS = {
 }
 
 # Approved customer communication templates.
+# --------------------------------------------------------------------------
+# Peril taxonomy — which cover a claimed incident needs, per AKKB 2023 Art 1
+# --------------------------------------------------------------------------
+# AKKB Art 1.1 lists the Teilkasko catalogue: Naturgewalten (Sturm ab 60 km/h, Hochwasser,
+# Überschwemmung, Hagel, Schneedruck, Lawinen, Steinschlag, Erdrutsch), Brand und Explosion,
+# Diebstahl und Raub, and Haarwild. Art 1.2 makes Vollkasko that same catalogue *plus*
+# Unfall — "ein unmittelbar von außen plötzlich mit mechanischer Gewalt einwirkendes
+# Ereignis" — plus mut- oder böswillige Handlungen betriebsfremder Personen.
+#
+# So the taxonomy is not a flat list: a peril belongs to a tier, and Vollkasko inherits
+# the tier below it. Keying this off the incident type the platform actually produces is
+# the point — an earlier version keyed on values nothing emitted, and silently declined
+# storm, flood and vandalism claims on policies that covered them.
+
+# Named perils: insured on Teilkasko, and therefore also on Vollkasko.
+NAMED_PERILS: dict[str, str] = {
+    "hail": "hail",
+    "storm_damage": "storm",
+    "flood": "flood",
+    "glass_breakage": "glass",
+    "theft_attempt": "theft",
+    "fire": "fire",
+    "wild_game": "wild_game",
+}
+
+# Unfall and malicious damage: Vollkasko only (AKKB Art 1.2).
+COLLISION_PERILS: dict[str, str] = {
+    "parking_collision": "collision",
+    "junction_collision": "collision",
+    "rear_end_collision": "collision",
+    "single_vehicle": "collision",
+    "vandalism": "vandalism",
+}
+
+PERIL_BY_INCIDENT: dict[str, str] = {**NAMED_PERILS, **COLLISION_PERILS}
+
+# How each peril reads to a person, in both languages the platform speaks.
+PERIL_LABELS: dict[str, tuple[str, str]] = {
+    "hail":        ("hail", "Hagel"),
+    "storm":       ("storm", "Sturm"),
+    "flood":       ("flood and high water", "Hochwasser und Überschwemmung"),
+    "glass":       ("glass breakage", "Glasbruch"),
+    "theft":       ("theft and robbery", "Diebstahl und Raub"),
+    "fire":        ("fire and explosion", "Brand und Explosion"),
+    "wild_game":   ("collision with wild animals", "Wildschaden"),
+    "collision":   ("accidental damage", "Unfallschaden"),
+    "vandalism":   ("malicious damage by third parties",
+                    "mut- oder böswillige Handlungen betriebsfremder Personen"),
+}
+
+# The cover tokens each product responds to at all. A peril outside its own product's
+# tier is not "unknown" — it is excluded, and the reason can be stated precisely.
+PRODUCT_TIERS: dict[str, tuple[str, ...]] = {
+    "Teilkasko": tuple(dict.fromkeys(NAMED_PERILS.values())),
+    "Vollkasko": tuple(dict.fromkeys(
+        list(NAMED_PERILS.values()) + list(COLLISION_PERILS.values()))),
+    "Haftpflicht": ("third_party_liability",),
+}
+
+
+def peril_for(incident_type: str | None) -> str | None:
+    """The cover a claimed incident needs, or None where the incident is unclassified."""
+    return PERIL_BY_INCIDENT.get((incident_type or "").strip().lower())
+
+
+def peril_label(peril: str | None, language: str = "en") -> str:
+    """The peril as a person would say it."""
+    row = PERIL_LABELS.get(peril or "")
+    if not row:
+        return (peril or "the peril claimed").replace("_", " ")
+    return row[1] if language == "de" else row[0]
+
+
 COMMS_TEMPLATES: dict[str, dict[str, str]] = {
     "claim_approved": {
         "de": "Ihr Schaden {reference} ist geprüft und freigegeben.",

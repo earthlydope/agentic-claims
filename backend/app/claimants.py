@@ -37,7 +37,8 @@ CUSTOMERS: list[dict[str, Any]] = [
             "inception_date": "2016-03-01", "renewal_date": "2027-02-28",
             "annual_premium_eur": 968.40, "excess_eur": 300.0,
             "sum_insured_eur": 21_400.0,
-            "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
+            "covers": ["collision", "glass", "theft", "fire", "storm", "flood", "hail",
+                       "wild_game", "vandalism"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
                 {"code": "ZB-MOBIL",
@@ -72,7 +73,8 @@ CUSTOMERS: list[dict[str, Any]] = [
             "inception_date": "2011-07-15", "renewal_date": "2027-06-30",
             "annual_premium_eur": 1_284.00, "excess_eur": 500.0,
             "sum_insured_eur": 28_900.0,
-            "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
+            "covers": ["collision", "glass", "theft", "fire", "storm", "flood", "hail",
+                       "wild_game", "vandalism"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
                 {"code": "ZB-MOBIL",
@@ -136,7 +138,7 @@ CUSTOMERS: list[dict[str, Any]] = [
             "inception_date": "2022-02-01", "renewal_date": "2027-01-31",
             "annual_premium_eur": 604.00, "excess_eur": 300.0,
             "sum_insured_eur": 16_800.0,
-            "covers": ["glass", "theft", "fire", "storm", "hail", "wild_game"],
+            "covers": ["glass", "theft", "fire", "storm", "flood", "hail", "wild_game"],
             "exclusions": ["at_fault_collision", "intent", "unlicensed", "intoxication"],
             "endorsements": [], "no_claims_years": 0, "protected_ncd": False,
         },
@@ -166,7 +168,8 @@ CUSTOMERS: list[dict[str, Any]] = [
             "inception_date": "2019-05-01", "renewal_date": "2027-04-30",
             "annual_premium_eur": 1_512.00, "excess_eur": 500.0,
             "sum_insured_eur": 34_200.0,
-            "covers": ["collision", "glass", "theft", "fire", "storm", "hail", "wild_game"],
+            "covers": ["collision", "glass", "theft", "fire", "storm", "flood", "hail",
+                       "wild_game", "vandalism"],
             "exclusions": ["intent", "unlicensed", "intoxication"],
             "endorsements": [
                 {"code": "ZB-NEUWERT",

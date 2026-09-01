@@ -93,7 +93,7 @@ class Notification(Strict):
     incident_type: Literal[
         "parking_collision", "junction_collision", "rear_end_collision", "hail",
         "glass_breakage", "single_vehicle", "wild_game", "theft_attempt", "vandalism",
-        "storm_damage", "flood",
+        "storm_damage", "flood", "fire",
     ] = Field(
         description=(
             "The closest match to what the customer described. Prefer the specific "
@@ -497,6 +497,7 @@ def _assemble_locally(answers, language, resolved_date, today) -> dict[str, Any]
         (r"auffahr|rear.?end|von hinten|behind", "rear_end_collision"),
         (r"kreuzung|junction|vorrang|right of way", "junction_collision"),
         (r"sturm|storm|umgest[üu]rzt|fallen tree", "storm_damage"),
+        (r"brand|feuer|fire|explosion|ausgebrannt|gebrannt", "fire"),
         (r"aufgebrochen|einbruch|gestohlen|stolen|theft", "theft_attempt"),
         (r"zerkratzt|vandal|mutwillig", "vandalism"),
         (r"parken|ausparken|parkl[üu]cke|parking|bollard|poller|pfeiler", "parking_collision"),

@@ -21,6 +21,12 @@ from google.genai import types
 
 from app.agents.harness import maybe_run_context
 from app.config import THRESHOLDS
+from app.semantic.definitions import (
+    COLLISION_PERILS,
+    PRODUCT_TIERS,
+    peril_for,
+    peril_label,
+)
 
 # --------------------------------------------------------------------------
 # Synthesisers — one per agent, each reading only what its own tools returned
@@ -126,6 +132,23 @@ def _synth_document_understanding(results: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Which exclusions the recorded facts actually engage. Deliberately conservative: an
+# exclusion only bites where the claim carries a fact supporting it, because a policy
+# listing "intoxication" is not evidence that anyone was drunk.
+def _EXCLUSIONS_ON_CLAIM(cov: dict[str, Any]) -> set[str]:
+    incident = cov.get("incident") or {}
+    engaged: set[str] = set()
+    if incident.get("driver_unlicensed"):
+        engaged.add("unlicensed")
+    if incident.get("driver_intoxicated"):
+        engaged.add("intoxication")
+    if incident.get("deliberate"):
+        engaged.add("intent")
+    if incident.get("type") in COLLISION_PERILS and incident.get("at_fault") == "policyholder":
+        engaged.add("at_fault_collision")
+    return engaged
+
+
 def _synth_coverage(results: dict[str, Any]) -> dict[str, Any]:
     cov = _d(results, "get_policy_coverage")
     wording = _d(results, "search_policy_wording")
@@ -139,46 +162,57 @@ def _synth_coverage(results: dict[str, Any]) -> dict[str, Any]:
     exclusions = set(cov.get("exclusions") or [])
     covers = set(cov.get("covers") or [])
 
-    named_perils = {
-        "hail": "hail", "glass_breakage": "glass", "theft_attempt": "theft",
-        "fire": "fire", "storm": "storm", "wild_game": "wild_game",
-    }
+    peril = peril_for(incident_type)
+    tier = PRODUCT_TIERS.get(product or "", ())
+
+    # Exclusions are checked for every product, not only for Teilkasko collisions. An
+    # earlier version consulted exactly one exclusion and let every comprehensive claim
+    # through, so intent, motorsport and unlicensed driving were unreachable positions.
+    breached = sorted(exclusions & _EXCLUSIONS_ON_CLAIM(cov))
 
     if not in_force:
         status = "lapsed"
         reasoning = "The policy was not in force on the date of loss."
+    elif breached:
+        status = "excluded"
+        reasoning = (
+            f"The policy excludes {breached[0].replace('_', ' ')}, which applies on the "
+            "facts recorded for this claim."
+        )
     elif product == "Haftpflicht" and own_damage:
         status = "excluded"
         reasoning = (
             "The policy provides third-party liability cover only. Damage to the "
             "policyholder's own vehicle falls outside that cover."
         )
-    elif product == "Teilkasko":
-        peril = named_perils.get(incident_type or "")
-        if peril and peril in covers:
-            status = "covered_with_excess"
-            reasoning = (
-                f"Partial cover includes {peril.replace('_', ' ')}, which is the peril "
-                "claimed here."
-            )
-        elif "at_fault_collision" in exclusions:
-            status = "excluded"
-            reasoning = (
-                "Partial cover responds to named perils only, and an at-fault collision "
-                "is not among them."
-            )
-        else:
-            status = "unknown"
-            reasoning = "The peril claimed does not map cleanly to a named partial-cover peril."
-    elif product == "Vollkasko":
-        status = "covered_with_excess"
+    elif peril is None:
+        status = "unknown"
         reasoning = (
-            "Comprehensive cover responds to accidental damage to the insured vehicle "
-            "irrespective of fault."
+            "The incident type on this claim does not map to an insured peril, so the "
+            "position cannot be established without a person."
+        )
+    elif peril not in tier:
+        # A peril outside the product's own tier: excluded, and we can say exactly why.
+        status = "excluded"
+        reasoning = (
+            f"{product} responds to named perils only, and "
+            f"{peril_label(peril)} is not among them."
+            if product == "Teilkasko"
+            else f"{peril_label(peril)} is not an insured peril on {product}."
+        )
+    elif peril not in covers:
+        # In the product's tier, but not bought on this schedule.
+        status = "excluded"
+        reasoning = (
+            f"{peril_label(peril).capitalize()} is insurable on {product} but is not "
+            "among the covers on this policy schedule."
         )
     else:
-        status = "unknown"
-        reasoning = "The product on this policy could not be mapped to a coverage position."
+        status = "covered_with_excess"
+        reasoning = (
+            f"{product} cover includes {peril_label(peril)}, which is the peril claimed "
+            "here."
+        )
 
     # The citation rule is not optional: without an authoritative clause there is no
     # material coverage answer, only an escalation.

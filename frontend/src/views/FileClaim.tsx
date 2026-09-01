@@ -37,6 +37,7 @@ const INCIDENT_LABEL: Record<string, [string, string]> = {
   wild_game:          ['Collision with a wild animal', 'Wildschaden'],
   theft_attempt:      ['Theft or break-in', 'Diebstahl oder Einbruch'],
   vandalism:          ['Vandalism', 'Vandalismus'],
+  fire:               ['Fire or explosion', 'Brand oder Explosion'],
   flood:              ['Flood or high water', 'Hochwasser'],
 }
 

@@ -101,8 +101,12 @@ CORPUS: list[Clause] = [
         section="Artikel 1 — Was ist versichert? (Teilkasko)",
         section_en="Article 1 — What is insured? (partial cover)",
         page=1,
-        products=("Teilkasko",),
-        title="Partial cover — named perils only",
+        # Vollkasko inherits this catalogue under Art 1.2 ("Die Vollkaskoversicherung
+        # umfasst die Teilkaskoversicherung ..."), so the article is authoritative for
+        # both products. Tagging it Teilkasko-only left comprehensive policies unable to
+        # retrieve the clause that insures the peril being claimed.
+        products=("Teilkasko", "Vollkasko"),
+        title="Named perils — the partial-cover catalogue, inherited by comprehensive",
         text_de=(
             "In der Teilkaskoversicherung sind das Fahrzeug und seine Teile gegen "
             "Beschädigung, Zerstörung und Verlust versichert durch Naturgewalten "
@@ -494,9 +498,23 @@ _STOPWORDS = {
     "what", "when", "where", "which", "who", "whom", "how", "why", "whether",
     "wie", "wo", "wer", "wen", "wem", "welche", "welcher", "welches", "warum", "wann",
     "gilt", "besteht", "leistet", "erbringt",
+    # Coverage verbs. Every coverage question contains one and so does nearly every
+    # clause, so they discriminate nothing while inflating the concept count a match has
+    # to clear.
+    "gedeckt", "deckt", "versichert", "versicherte", "versicherten", "ersetzt",
+    "bezahlt", "zahlt", "übernommen", "covered", "cover", "covers", "insured",
+    "insures", "pay", "pays", "paid", "reimbursed",
+    # Possessives and the word "insurance" itself: present in most questions and most
+    # clauses, discriminating in neither.
+    "mein", "meine", "meinem", "meinen", "meiner", "ihr", "ihre", "ihrem", "ihren",
+    "versicherung", "versicherungen", "insurance", "policy", "polizze",
 }
 
 _EXPANSIONS: dict[str, tuple[str, ...]] = {
+    # AKKB Art 1.2 insures "mut- oder böswillige Handlungen betriebsfremder Personen".
+    # Nobody asks about it in those words.
+    "vandalismus": ("mutwillige", "böswillige", "handlungen", "betriebsfremder"),
+    "vandalism": ("mutwillige", "böswillige", "handlungen", "betriebsfremder"),
     "collision": ("accident", "unfall", "crash", "mechanical", "kollision", "sudden"),
     "accident": ("collision", "unfall", "mechanical", "sudden", "gewalt"),
     "own": ("policyholder", "eigenen", "versicherten", "insured", "fahrzeuges"),
@@ -526,9 +544,54 @@ def _tokens(text: str) -> set[str]:
     }
 
 
+# German builds its claims vocabulary by compounding, and the head of the compound is the
+# part the conditions are written in: the corpus says "Hagel", a customer says
+# "Hagelschaden". Splitting on the handful of heads that actually appear in motor claims is
+# enough — a full decompounder would be the wrong tool for a closed vocabulary, and would
+# introduce failure modes of its own on a corpus this size.
+_COMPOUND_TAILS = (
+    "schaden", "schäden", "schadens", "schadenfall", "schadensfall",
+    "versicherung", "deckung", "ersatz", "kosten", "bruch", "verlust",
+)
+
+# A few compounds decompose into a head the corpus does not use. These are the ones a
+# customer or a handler actually types.
+_COMPOUND_HEADS: dict[str, tuple[str, ...]] = {
+    "glasbruch": ("glas", "verglasung", "bruch"),
+    "wildschaden": ("haarwild", "wild"),
+    "parkschaden": ("parken", "abstellen"),
+    "totalschaden": ("totalschaden", "zerstört"),
+    "vorschaden": ("vorschaden",),
+    "blechschaden": ("blech",),
+}
+
+
+def _decompound(term: str) -> set[str]:
+    """The head of a German compound, where the corpus is written in the head.
+
+    Returns the parts to add, never replacing the original — an exact match on the whole
+    compound must still win where the corpus happens to carry it.
+    """
+    out: set[str] = set()
+    out.update(_COMPOUND_HEADS.get(term, ()))
+    for tail in _COMPOUND_TAILS:
+        if term.endswith(tail) and len(term) - len(tail) >= 4:
+            head = term[: -len(tail)]
+            out.add(head)
+            # "Sturmschaden" -> "sturm"; strip a linking -s where one was used.
+            if head.endswith("s") and len(head) > 4:
+                out.add(head[:-1])
+            break
+    return {p for p in out if len(p) > 2}
+
+
 def _expand(terms: set[str]) -> set[str]:
     out = set(terms)
     for t in terms:
+        out.update(_EXPANSIONS.get(t, ()))
+        out.update(_decompound(t))
+    # A compound's head can itself carry an expansion ("hagel" -> "hail").
+    for t in set(out) - terms:
         out.update(_EXPANSIONS.get(t, ()))
     return out
 
@@ -555,11 +618,21 @@ def retrieve(
     match needs at least `min_terms` distinct overlapping terms before it counts — unless
     the query itself is that short. Returning nothing is a legitimate answer: it means the
     agent abstains, which the citation rule downstream then enforces.
+
+    The floor counts *concepts the asker raised*, not the expanded term set. Expansions and
+    compound heads are synonyms of a concept already counted, so scoring them separately
+    would make every expansion raise the bar it was added to clear — which is what made
+    "Hagelschaden" abstain while "Hagel" matched.
     """
-    q = _expand(_tokens(query))
+    asked = _tokens(query)
+    q = _expand(asked)
     if not q:
         return []
-    required = min(min_terms, len(q))
+    required = min(min_terms, len(asked))
+
+    # Which expanded terms belong to which concept the asker actually raised, so overlap
+    # can be counted per concept rather than per token.
+    concepts: list[set[str]] = [{t} | _expand({t}) for t in asked]
 
     scored: list[RetrievedClause] = []
     for clause in CORPUS:
@@ -571,12 +644,13 @@ def retrieve(
             f"{clause.text_en} {clause.text_de}"
         )
         overlap = q & body
-        if len(overlap) < required:
+        matched_concepts = sum(1 for c in concepts if c & body)
+        if matched_concepts < required:
             continue
 
         title_terms = _tokens(f"{clause.title} {clause.section} {clause.section_en}")
-        boost = 0.25 * len(q & title_terms)
-        score = (len(overlap) / max(len(q), 1)) + boost
+        boost = 0.25 * sum(1 for c in concepts if c & title_terms)
+        score = (matched_concepts / max(len(concepts), 1)) + boost
         scored.append(RetrievedClause(clause, round(score, 4), sorted(overlap)))
 
     scored.sort(key=lambda r: (-r.score, r.clause.clause_id))
