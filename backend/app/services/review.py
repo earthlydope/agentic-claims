@@ -179,8 +179,14 @@ def _open_recovery_if_any(
         return None
     if float(claim.settlement_amount_eur or 0.0) <= 0.0:
         return None
-    if claim.incident_type in ("hail", "storm_damage", "flood", "fire", "glass_breakage"):
-        return None          # nature has no liability insurer
+
+    # The same test the platform's own liability tool applies. Opening a recovery on a
+    # claim `get_liability_position` calls self-inflicted put the file in front of a handler
+    # with nobody to pursue — a made-up work item, which is worse than none.
+    from app.agents.tools import SELF_INFLICTED_INCIDENTS
+
+    if claim.incident_type in SELF_INFLICTED_INCIDENTS:
+        return None
 
     existing = db.scalars(
         select(ReviewTask).where(
@@ -239,11 +245,34 @@ def _raise_successor(
     reason_detail: str,
     finding: str = "",
 ) -> ReviewTask:
-    """The next task in the chain, carrying the finding that produced it."""
+    """The next task in the chain, carrying the finding that produced it.
+
+    Refuses to stack: a claim already open on the target queue gets its existing task
+    updated rather than a second one beside it. Without this a referral from the SIU queue
+    back to SIU — which the verb set allows, because a referral onward is legitimate —
+    would chain forever and put two open items on one desk for one claim.
+    """
     import secrets
 
     from app.config import AUTHORITY_LIMITS_EUR
     from app.personas import QUEUE_OWNERS
+
+    standing = db.scalars(
+        select(ReviewTask).where(
+            ReviewTask.claim_reference == claim.reference,
+            ReviewTask.queue == queue,
+            ReviewTask.status == "open",
+            ReviewTask.task_id != previous.task_id,
+        )
+    ).first()
+    if standing is not None:
+        standing.reason = reason
+        standing.reason_detail = (
+            f"{reason_detail} {finding}".strip() if finding else reason_detail
+        )
+        standing.proposed_amount_eur = previous.proposed_amount_eur
+        standing.proposed_decision = previous.proposed_decision
+        return standing
 
     owners = QUEUE_OWNERS.get(queue) or ("claim_handler",)
     authority_role = owners[0]

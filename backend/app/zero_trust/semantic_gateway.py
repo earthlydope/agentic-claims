@@ -512,14 +512,27 @@ class DecisionPolicyGuard:
         # An adverse outcome is never autonomous. A decline or a reduction is a
         # materially adverse decision for a customer, and the architecture guarantees a
         # visible route to a person — so it is confirmed by one before it is issued.
-        adverse = decision.lower() in ("declined", "decline", "rejected", "reduced")
+        # A nil payment is adverse to the person receiving it, whatever the decision
+        # string says. Closing a claim at nothing because the assessed amount did not clear
+        # the excess is the right answer, but it is not an answer to issue without a person
+        # having confirmed the figure the excess was tested against.
+        nil_outcome = bool(package.get("below_excess"))
+        adverse = (
+            decision.lower() in ("declined", "decline", "rejected", "reduced") or nil_outcome
+        )
         add(
             "PG-09",
             "Adverse decision review",
             not adverse,
             (
-                f"A '{decision}' outcome is materially adverse to the customer and is "
-                "never issued autonomously — a named person confirms it."
+                (
+                    "The claim pays nothing because the assessed amount does not exceed "
+                    "the excess. That is adverse to the customer and is never issued "
+                    "autonomously — a named person confirms it."
+                    if nil_outcome
+                    else f"A '{decision}' outcome is materially adverse to the customer "
+                         "and is never issued autonomously — a named person confirms it."
+                )
                 if adverse
                 else "The proposed outcome is not adverse to the customer."
             ),

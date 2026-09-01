@@ -498,16 +498,9 @@ _STOPWORDS = {
     "what", "when", "where", "which", "who", "whom", "how", "why", "whether",
     "wie", "wo", "wer", "wen", "wem", "welche", "welcher", "welches", "warum", "wann",
     "gilt", "besteht", "leistet", "erbringt",
-    # Coverage verbs. Every coverage question contains one and so does nearly every
-    # clause, so they discriminate nothing while inflating the concept count a match has
-    # to clear.
-    "gedeckt", "deckt", "versichert", "versicherte", "versicherten", "ersetzt",
-    "bezahlt", "zahlt", "übernommen", "covered", "cover", "covers", "insured",
-    "insures", "pay", "pays", "paid", "reimbursed",
-    # Possessives and the word "insurance" itself: present in most questions and most
-    # clauses, discriminating in neither.
+    # Possessives and quantity words: no retrieval signal in either language.
     "mein", "meine", "meinem", "meinen", "meiner", "ihr", "ihre", "ihrem", "ihren",
-    "versicherung", "versicherungen", "insurance", "policy", "polizze",
+    "hoch", "viel", "lange", "oft", "bin", "ich", "sie", "man",
 }
 
 _EXPANSIONS: dict[str, tuple[str, ...]] = {
@@ -537,6 +530,22 @@ _EXPANSIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Terms that belong in the query but must not count toward the concept floor.
+#
+# Every coverage question contains one of these and so does nearly every clause, so they
+# discriminate almost nothing — but removing them outright was worse: it left "What does my
+# policy cover?" with no tokens at all, and a question whose entire subject is the cover
+# then abstained. They are kept so they can still match and still score, and excluded only
+# from the count of distinct concepts a citation has to earn.
+_LOW_SIGNAL = {
+    "gedeckt", "deckt", "versichert", "versicherte", "versicherten", "ersetzt",
+    "bezahlt", "zahlt", "übernommen", "leistung", "leistungen",
+    "covered", "cover", "covers", "coverage", "insured", "insures",
+    "pay", "pays", "paid", "reimbursed", "benefit",
+    "versicherung", "versicherungen", "insurance", "policy", "polizze", "vertrag",
+}
+
+
 def _tokens(text: str) -> set[str]:
     return {
         t for t in re.findall(r"[a-zäöüß]+", (text or "").lower())
@@ -563,6 +572,13 @@ _COMPOUND_HEADS: dict[str, tuple[str, ...]] = {
     "totalschaden": ("totalschaden", "zerstört"),
     "vorschaden": ("vorschaden",),
     "blechschaden": ("blech",),
+    "windschutzscheibe": ("verglasung", "scheiben", "glas"),
+    "windscreen": ("verglasung", "scheiben", "glas", "glass"),
+    "selbstbehalt": ("selbstbeteiligung", "selbstbehalt"),
+    "hagelschaden": ("hagel",),
+    # The corpus writes cover as "versichert" and "Deckung"; people write "deckt".
+    "deckt": ("deckung", "versichert"),
+    "deckung": ("deckung", "versichert"),
 }
 
 
@@ -628,11 +644,22 @@ def retrieve(
     q = _expand(asked)
     if not q:
         return []
-    required = min(min_terms, len(asked))
 
-    # Which expanded terms belong to which concept the asker actually raised, so overlap
-    # can be counted per concept rather than per token.
-    concepts: list[set[str]] = [{t} | _expand({t}) for t in asked]
+    # The floor is measured on the *substantive* terms. A question made entirely of
+    # coverage vocabulary — "what does my policy cover?" — is a real question with a real
+    # answer, so it needs one match rather than two; a question with substantive terms has
+    # to earn the usual two.
+    substantive = asked - _LOW_SIGNAL
+    required = min(min_terms, len(substantive)) if substantive else 1
+
+    # Which expanded terms belong to which concept the asker actually raised, so overlap is
+    # counted per concept rather than per token. Low-signal terms still score — they help
+    # rank — but where the question has a substantive term, only substantive concepts can
+    # satisfy the floor. Otherwise "Ist mein Hund versichert?" is rescued by the word
+    # "versichert" matching every clause in the corpus.
+    counting = substantive or asked
+    concepts: list[set[str]] = [{t} | _expand({t}) for t in counting]
+    scoring: list[set[str]] = [{t} | _expand({t}) for t in asked]
 
     scored: list[RetrievedClause] = []
     for clause in CORPUS:
@@ -649,8 +676,9 @@ def retrieve(
             continue
 
         title_terms = _tokens(f"{clause.title} {clause.section} {clause.section_en}")
-        boost = 0.25 * sum(1 for c in concepts if c & title_terms)
-        score = (matched_concepts / max(len(concepts), 1)) + boost
+        boost = 0.25 * sum(1 for c in scoring if c & title_terms)
+        scored_hits = sum(1 for c in scoring if c & body)
+        score = (scored_hits / max(len(scoring), 1)) + boost
         scored.append(RetrievedClause(clause, round(score, 4), sorted(overlap)))
 
     scored.sort(key=lambda r: (-r.score, r.clause.clause_id))

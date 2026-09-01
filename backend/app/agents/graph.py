@@ -15,6 +15,8 @@ here and in the tool wrapper, so swapping the model out does not swap the contro
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import datetime as dt
 import operator
@@ -65,6 +67,9 @@ from app.agents.orchestrator import (  # noqa: E402
 from app.services import ledger  # noqa: E402
 from app.zero_trust.crypto_guard import sign_action  # noqa: E402
 from app.zero_trust.write_gateway import gateway  # noqa: E402
+
+
+log = logging.getLogger(__name__)
 
 
 def _merge(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
@@ -445,6 +450,36 @@ def _assessor_node():
     return node
 
 
+def _risk_node():
+    """The fraud stage, with the signal derivation in front of it.
+
+    A read-classified tool must not write, so the signals a claim implies on its own facts
+    are stored here — on the stage that owns risk — and the agent then reads them like any
+    other stored signal.
+    """
+    inner = _agent_node("fraud_risk", "risk")
+
+    async def node(state: ClaimState) -> dict[str, Any]:
+        from app.services import risk_signals
+
+        ctx = _CTX.get()
+        try:
+            added = risk_signals.refresh(ctx.db, state["reference"])
+            if added:
+                _BUS.get().emit(
+                    "security", "risk", status="ok",
+                    detail=f"{added} risk signal(s) derived from the claim's own facts.",
+                    data={"derived": added},
+                )
+        except Exception as exc:  # noqa: BLE001 — a signal that cannot be derived is not a
+            # reason to stop the claim; the stored picture is simply the seeded one.
+            log.warning("risk signal derivation failed on %s: %s", state["reference"], exc)
+        return await inner(state)
+
+    node.__name__ = "node_risk"
+    return node
+
+
 def _comms_node():
     inner = _agent_node("customer_communication", "close")
 
@@ -594,7 +629,7 @@ def build_graph():
     g.add_node("coverage", _agent_node("coverage", "coverage"))
     g.add_node("damage", _agent_node("damage_assessment", "damage"))
     g.add_node("estimate", _assessor_node())
-    g.add_node("risk", _agent_node("fraud_risk", "risk"))
+    g.add_node("risk", _risk_node())
     g.add_node("decision", _agent_node("decision", "decision"))
     g.add_node("guard", node_guard)
     g.add_node("approval", _non_fatal(_agent_node("hitl_coordinator", "approval"),
