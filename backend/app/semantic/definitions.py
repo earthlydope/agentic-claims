@@ -264,6 +264,21 @@ COMMS_TEMPLATES: dict[str, dict[str, str]] = {
         "de": "Für Ihren Schaden {reference} benötigen wir noch eine Angabe.",
         "en": "We need one more detail for your claim {reference}.",
     },
+    "below_excess": {
+        "de": "Der ermittelte Schaden übersteigt Ihren Selbstbehalt nicht, daher kommt es "
+              "zu keiner Zahlung.",
+        "en": "The assessed amount does not exceed your excess, so no payment arises.",
+    },
+    "total_loss": {
+        "de": "Ihr Fahrzeug gilt als Totalschaden. Wir rechnen auf Basis des "
+              "Wiederbeschaffungswertes abzüglich Restwert und Selbstbehalt ab.",
+        "en": "Your vehicle is a total loss. We settle on the replacement value less the "
+              "salvage value and your excess.",
+    },
+    "payment_made": {
+        "de": "Die Zahlung zu Ihrem Schaden {reference} wurde angewiesen.",
+        "en": "The payment on your claim {reference} has been released.",
+    },
     "coverage_declined": {
         "de": "Für Ihren Schaden {reference} besteht nach der Polizze kein Deckungsanspruch.",
         "en": "Your policy does not provide cover for claim {reference}.",

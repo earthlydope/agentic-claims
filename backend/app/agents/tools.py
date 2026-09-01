@@ -26,7 +26,8 @@ TOOL_RISK_CLASS: dict[str, str] = {
     "get_policy_coverage": "read-medium",
     "get_endorsements": "read-medium",
     "search_policy_wording": "read-medium",
-    "get_photo_findings": "read-medium",
+    "get_damage_findings": "read-medium",
+    "get_photo_findings": "read-medium",   # the former name, still resolvable
     "lookup_part_price": "read-low",
     "get_labour_rate": "read-low",
     "calculate_repair_estimate": "compute-sandboxed",
@@ -233,9 +234,18 @@ def search_policy_wording(question: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # Damage Assessment
 # --------------------------------------------------------------------------
-def get_photo_findings() -> dict[str, Any]:
-    """Read the approved photo findings for this claim: which panels were detected, the
-    action each needs, the detection confidence, and the photo quality it came from.
+def get_damage_findings() -> dict[str, Any]:
+    """Read the damage findings for this claim: which panels are affected, the action each
+    needs, the confidence, and the document each finding came from.
+
+    Findings come from every document that carries them, not from photographs only. On an
+    Austrian motor claim the Kostenvoranschlag is normally the primary technical document
+    and the photographs corroborate it — a pipeline that reads only photographs is inverted
+    relative to how the file actually arrives, and will report no damage at all on a claim
+    whose evidence is a repair quote.
+
+    A panel read off a priced line item is stronger evidence than one inferred from a
+    photograph, so where both name the same panel the repair document wins.
 
     Read-only. There are no settlement tools in this scope.
     """
@@ -244,37 +254,59 @@ def get_photo_findings() -> dict[str, Any]:
 
     panels: list[dict[str, Any]] = []
     low_quality: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    unusable: list[dict[str, Any]] = []
+    by_panel: dict[str, dict[str, Any]] = {}
 
-    for doc in ext.get("data") or []:
-        if doc.get("kind") != "photo":
-            continue
+    # Repair documents first, so a quoted line beats a photo guess on the same panel.
+    def _rank(doc: dict[str, Any]) -> int:
+        return 0 if doc.get("doc_type") in ("repair_quote", "invoice", "assessment") else 1
+
+    for doc in sorted(ext.get("data") or [], key=_rank):
+        is_photo = doc.get("kind") == "photo"
         quality = doc.get("quality_score") or 0.0
-        if quality < 0.55:
+
+        if is_photo and quality < 0.55:
             low_quality.append({
                 "doc_id": doc["doc_id"],
                 "filename": doc.get("filename"),
                 "quality_score": quality,
             })
+
         for det in doc.get("detections") or []:
             key = det.get("panel")
-            if not key or key in seen:
+            if not key:
                 continue
-            seen.add(key)
-            panels.append({
+
+            # A panel seen only in a photograph the platform has itself declared
+            # unreadable is not evidence to price from. It is recorded as unusable and a
+            # specific new view is requested — which is the behaviour the lifecycle
+            # already promises, and which previously did not happen because the quality
+            # check appended to a list and then priced the panel anyway.
+            if is_photo and quality < 0.55 and key not in by_panel:
+                unusable.append({
+                    "panel": key,
+                    "doc_id": doc["doc_id"],
+                    "filename": doc.get("filename"),
+                    "quality_score": quality,
+                    "ask": _reask_for(key, doc.get("filename")),
+                })
+                continue
+
+            if key in by_panel:
+                continue
+            row = {
                 **det,
                 "structural": key in STRUCTURAL_PANELS,
                 "from_doc": doc["doc_id"],
-                "photo_quality": quality,
+                "source": doc.get("doc_type") or doc.get("kind"),
+                "photo_quality": quality if is_photo else None,
                 "in_catalogue": key in PANEL_CATALOGUE,
-            })
+            }
+            by_panel[key] = row
+            panels.append(row)
 
     structural = any(p["structural"] for p in panels)
     severity = "complex" if structural or len(panels) >= 4 else "simple"
-    missing_views = [
-        "a straight-on view of the damaged panel from about two metres"
-        for _ in low_quality
-    ]
 
     return {
         "data": {
@@ -283,14 +315,47 @@ def get_photo_findings() -> dict[str, Any]:
             "structural_damage": structural,
             "severity": severity,
             "low_quality_photos": low_quality,
-            "missing_views": missing_views,
+            "unusable_findings": unusable,
+            "missing_views": [u["ask"] for u in unusable],
             "severity_basis": (
                 "structural panel detected" if structural
                 else f"{len(panels)} panel(s) affected"
             ),
         },
-        "provenance": {"semantic_model": "sm_damage_estimate", "source": "approved photo findings"},
+        "provenance": {
+            "semantic_model": "sm_damage_estimate",
+            "source": "damage findings across every document on the claim",
+        },
     }
+
+
+# The re-ask names the panel that could not be read. It was previously one hardcoded
+# sentence about a tailgate, sent for any unreadable document on any claim.
+_PANEL_WORDS = {
+    "bumper_front": "the front bumper", "bumper_rear": "the rear bumper",
+    "door_front_left": "the left front door", "door_front_right": "the right front door",
+    "door_rear_left": "the left rear door", "door_rear_right": "the right rear door",
+    "fender_front_left": "the left front wing", "fender_front_right": "the right front wing",
+    "tailgate": "the tailgate", "bonnet": "the bonnet", "roof": "the roof",
+    "mirror_left": "the left door mirror", "mirror_right": "the right door mirror",
+    "side_window_left": "the left side window", "side_window_right": "the right side window",
+    "windscreen": "the windscreen", "sill_left": "the left sill", "sill_right": "the right sill",
+    "a_pillar_left": "the left A-pillar", "a_pillar_right": "the right A-pillar",
+    "radiator_support": "the radiator support", "airbag_module": "the airbag module",
+}
+
+
+def _reask_for(panel: str, filename: str | None = None) -> str:
+    """One specific new view, naming the panel that could not be read."""
+    what = _PANEL_WORDS.get(panel, panel.replace("_", " "))
+    return (
+        f"The photo of {what} is too soft to measure the panel edges. Please send one more "
+        f"photo of {what} from about two metres back, in daylight."
+    )
+
+
+# The old name, kept so nothing that still asks for photo findings breaks.
+get_photo_findings = get_damage_findings
 
 
 def lookup_part_price(panel: str) -> dict[str, Any]:
@@ -321,7 +386,7 @@ def calculate_repair_estimate() -> dict[str, Any]:
     filesystem. The returned isolation telemetry is proof of that, not an assertion.
     """
     ctx = run_context()
-    findings = get_photo_findings()["data"]
+    findings = get_damage_findings()["data"]
     rate_row = get_labour_rate()["data"] or {}
     labour_rate = float(rate_row.get("labour_rate_eur") or 125.0)
 
@@ -569,7 +634,11 @@ def get_vehicle_valuation() -> dict[str, Any]:
             "age_years": age_years,
             "replacement_value_eur": float(vehicle.get("market_value_eur") or 0.0),
             "sum_insured_eur": float(policy.get("sum_insured_eur") or 0.0),
+            # AKKB ZB-NEUWERT runs 24 months from first registration. Availability is the
+            # age test only; whether the schedule actually carries the endorsement is
+            # checked where the indemnity is set, not here.
             "new_for_old_available": age_years <= 2,
+            "new_price_eur": round(float(vehicle.get("market_value_eur") or 0.0) * 1.35, 2),
             "valuation_basis": "Wiederbeschaffungswert — trade replacement value",
         },
         "provenance": {
@@ -579,53 +648,137 @@ def get_vehicle_valuation() -> dict[str, Any]:
     }
 
 
-def check_total_loss_threshold() -> dict[str, Any]:
-    """Run the total-loss test: repair cost against replacement value.
+def _num_or_zero(value: Any) -> float:
+    try:
+        return round(float(value or 0.0), 2)
+    except (TypeError, ValueError):
+        return 0.0
 
-    Where repair cost exceeds the policy threshold the loss is treated as a total loss and
-    the indemnity is the replacement value less the salvage, rather than the repair bill.
-    The threshold is policy wording, not a setting — it comes from the clause.
+
+def estimate_residual_value(replacement: float, outputs: dict[str, Any]) -> float:
+    """A modelled Restwert, varying with what the damage actually is.
+
+    A flat coefficient is wrong in a way that matters: salvage on a hail-damaged car with
+    an intact drivetrain and salvage on a structurally destroyed shell are not the same
+    fraction of anything. This is still a model, not a market — a real file establishes
+    Restwert from binding bids on a Restwertbörse, and the provenance says so — but it
+    moves in the right direction for the right reason, which a constant cannot.
+    """
+    damage = outputs.get("damage_assessment") or {}
+    panels = damage.get("panels") or []
+    structural = bool(damage.get("structural_damage"))
+
+    # Undamaged running gear and a straight shell are what a salvage buyer pays for.
+    share = 0.30
+    if structural:
+        share -= 0.12
+    share -= 0.015 * max(0, len(panels) - 2)
+    if any((p.get("panel") or "") == "airbag_module" for p in panels):
+        share -= 0.04          # deployed restraints are a large part of a rebuild
+    share = max(0.06, min(0.35, share))
+    return round(replacement * share, 2)
+
+
+def check_total_loss_threshold() -> dict[str, Any]:
+    """Run the total-loss test the conditions actually prescribe.
+
+    AKKB 2023 Art 5.1.1 sets two distinct rules and they are easy to conflate:
+
+      1. A total loss exists where the vehicle is destroyed or lost, **or** where the
+         expected repair costs *plus the salvage value* exceed the replacement value —
+         Wiederherstellungskosten zuzüglich der Restwerte > Wiederbeschaffungswert. That
+         quantity is the Wiederbeschaffungsaufwand and it is the test.
+
+      2. The policyholder **may nevertheless demand the repair cost**, provided it is not
+         expected to exceed 70 per cent of the replacement value, that a proper repair at
+         that figure is actually possible at a qualified workshop, and that an invoice from
+         that workshop is produced as proof.
+
+    An earlier version ran rule 2's percentage as though it were rule 1's test, which
+    inverted it: 70 per cent is the policyholder's entitlement threshold to insist on
+    repair, not the insurer's trigger to declare a write-off. Salvage was then applied
+    after the verdict, so the quantity the real test turns on could not influence it.
     """
     ctx = run_context()
     valuation = get_vehicle_valuation()["data"]
     estimate = (ctx.agent_outputs.get("repair_estimate") or {})
     repair_cost = float(estimate.get("total_cost") or 0.0)
     replacement = float(valuation.get("replacement_value_eur") or 0.0)
+    residual = estimate_residual_value(replacement, ctx.agent_outputs)
 
-    threshold = 0.70          # AKKB Art 5.1.1
+    repair_option_threshold = 0.70          # AKKB Art 5.1.1, second sentence
     ratio = round(repair_cost / replacement, 4) if replacement else 0.0
+    recovery_cost = round(repair_cost + residual, 2)
 
+    # The two rules give three outcomes, not two, and the middle one is where most
+    # Austrian Kasko write-offs actually sit.
+    #
+    #   rule 1 met            — repair plus salvage exceeds the value: repair is
+    #                           uneconomic outright, a true total loss.
+    #   repair above 70%      — rule 1 not met, but the policyholder has lost the right
+    #                           to demand the repair cost, so the file is settled on a
+    #                           total-loss basis unless the insurer chooses to authorise
+    #                           a repair anyway.
+    #   repair at or below    — the policyholder may demand the repair cost, on
+    #   70%                     production of a Fachwerkstätte invoice.
+    basis_reason = ""
     if not replacement or not repair_cost:
         verdict = "borderline"
-    elif ratio > threshold:
-        verdict = "total_loss"
-    elif ratio > threshold - 0.10:
+    elif recovery_cost > replacement:
+        verdict, basis_reason = "total_loss", "recovery_cost_exceeds_value"
+    elif ratio > repair_option_threshold:
+        verdict, basis_reason = "total_loss", "above_repair_option_threshold"
+    elif ratio > repair_option_threshold - 0.05 or recovery_cost > replacement * 0.95:
         verdict = "borderline"
     else:
         verdict = "economically_repairable"
 
-    # Salvage retains value even on a total loss, and the indemnity is net of it.
-    residual = round(replacement * 0.14, 2) if verdict == "total_loss" else 0.0
+    repair_option_available = bool(replacement) and ratio <= repair_option_threshold
     payable = round(max(replacement - residual, 0.0), 2) if verdict == "total_loss" else 0.0
+
+    if basis_reason == "recovery_cost_exceeds_value":
+        basis = (
+            f"Repair EUR {repair_cost:,.2f} plus salvage EUR {residual:,.2f} = "
+            f"EUR {recovery_cost:,.2f}, which exceeds the replacement value of "
+            f"EUR {replacement:,.2f}. A total loss on the first limb of AKKB Art 5.1.1."
+        )
+    elif basis_reason == "above_repair_option_threshold":
+        basis = (
+            f"Repair is {ratio * 100:.1f}% of replacement value, above the 70% at which "
+            "AKKB Art 5.1.1 gives the policyholder the right to demand the repair cost. "
+            f"Settled on a total-loss basis: EUR {replacement:,.2f} less salvage of "
+            f"EUR {residual:,.2f}."
+        )
+    else:
+        basis = (
+            f"Repair EUR {repair_cost:,.2f} plus salvage EUR {residual:,.2f} = "
+            f"EUR {recovery_cost:,.2f} against a replacement value of "
+            f"EUR {replacement:,.2f}; repair is {ratio * 100:.1f}% of value, so the "
+            "policyholder may demand the repair cost on production of a qualified "
+            "workshop invoice."
+        )
 
     return {
         "data": {
             "verdict": verdict,
             "repair_cost_eur": round(repair_cost, 2),
             "replacement_value_eur": round(replacement, 2),
-            "ratio": ratio,
-            "threshold": threshold,
             "residual_value_eur": residual,
+            "recovery_cost_eur": recovery_cost,
+            "ratio": ratio,
+            "threshold": repair_option_threshold,
+            "repair_option_available": repair_option_available,
+            "repair_option_requires_invoice": repair_option_available,
+            "total_loss_basis": basis_reason,
+            "new_for_old_available": bool(valuation.get("new_for_old_available")),
+            "new_price_eur": _num_or_zero(valuation.get("new_price_eur")),
             "payable_on_total_loss_eur": payable,
-            "basis": (
-                f"Repair cost is {ratio * 100:.1f}% of replacement value against a "
-                f"{threshold * 100:.0f}% threshold."
-            ),
+            "basis": basis,
         },
         "provenance": {
             "semantic_model": "sm_damage_estimate",
             "clause": "AKKB Art 5.1.1",
-            "note": "The threshold is policy wording, not a configurable setting.",
+            "salvage_basis": "modelled from damage severity — a real file uses Restwertbörse bids",
         },
     }
 
@@ -729,7 +882,7 @@ TOOL_SCOPE: dict[str, list] = {
     "intake_orchestrator": [get_claim_360, get_claim_timeline, get_outstanding_evidence],
     "document_understanding": [get_extractions],
     "coverage": [get_policy_coverage, get_endorsements, search_policy_wording],
-    "damage_assessment": [get_photo_findings, lookup_part_price],
+    "damage_assessment": [get_damage_findings, lookup_part_price],
     "repair_estimate": [get_labour_rate, calculate_repair_estimate, get_reasonableness_band],
     "fraud_risk": [get_risk_signals, graph_neighbours],
     "total_loss": [get_vehicle_valuation, check_total_loss_threshold, search_policy_wording],

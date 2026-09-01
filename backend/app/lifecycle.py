@@ -192,6 +192,12 @@ STATUSES: tuple[ClaimStatus, ...] = (
                 label_de="Abgelehnt",
                 description_de="Von einem benannten Mitarbeiter abgelehnt, mit Begründung "
                                "im Akt."),
+    ClaimStatus("closed_without_payment", "Closed — nothing payable", "close", "neutral",
+                terminal=True,
+                description="Settled at nil: the assessed amount did not exceed the excess.",
+                label_de="Abgeschlossen — keine Zahlung",
+                description_de="Mit Null erledigt: der ermittelte Betrag übersteigt den "
+                               "Selbstbehalt nicht."),
     ClaimStatus("closed", "Closed", "close", "neutral", terminal=True,
                 description="The file is closed.",
                 label_de="Abgeschlossen",

@@ -245,7 +245,7 @@ def _synth_coverage(results: dict[str, Any]) -> dict[str, Any]:
 
 
 def _synth_damage(results: dict[str, Any]) -> dict[str, Any]:
-    f = _d(results, "get_photo_findings")
+    f = _d(results, "get_damage_findings")
     return {
         "severity": f.get("severity"),
         "severity_basis": f.get("severity_basis"),
@@ -685,7 +685,7 @@ PLANS: dict[str, list[ToolStep]] = {
         ("get_endorsements", None),
         ("search_policy_wording", _coverage_question),
     ],
-    "damage_assessment": [("get_photo_findings", None)],
+    "damage_assessment": [("get_damage_findings", None)],
     "repair_estimate": [("get_labour_rate", None), ("calculate_repair_estimate", None)],
     "fraud_risk": [("get_risk_signals", None), ("graph_neighbours", None)],
     "total_loss": [("get_vehicle_valuation", None),

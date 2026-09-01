@@ -328,6 +328,81 @@ LIVE_CLAIMS: list[dict] = [
             },
         ],
     },
+    {
+        "reference": "AT-2026-004422",
+        "scenario_key": "total_loss",
+        "party_id": "PTY-AT-100244",
+        "hours_ago": 5,
+        "incident_date": "2026-08-27",
+        "incident_city": "Sankt Johann im Pongau",
+        "incident_region": "Salzburg",
+        "incident_location": "A10 Tauern Autobahn, km 54, Richtung Villach",
+        "incident_type": "single_vehicle",
+        "collision_type": "run_off_road",
+        "language": "de",
+        "channel": "phone",
+        "injury_reported": False,
+        "third_party_involved": False,
+        "fnol_text": (
+            "Auf der A10 bin ich bei Regen ins Rutschen gekommen und gegen die Leitschiene "
+            "geprallt. Der ganze Vorderwagen ist hin, die Airbags sind ausgelöst und das "
+            "Auto steht jetzt beim Abschleppdienst in St. Johann. Verletzt ist niemand."
+        ),
+        "detections": [
+            {"panel": "radiator_support", "action": "replace", "paint": False, "confidence": 0.93},
+            {"panel": "a_pillar_left", "action": "repair", "paint": True, "confidence": 0.9},
+            {"panel": "airbag_module", "action": "replace", "paint": False, "confidence": 0.95},
+            {"panel": "bonnet", "action": "replace", "paint": True, "confidence": 0.94},
+            {"panel": "fender_front_left", "action": "replace", "paint": True, "confidence": 0.93},
+            {"panel": "bumper_front", "action": "replace", "paint": True, "confidence": 0.95},
+        ],
+        "documents": [
+            {
+                "kind": "pdf", "filename": "Kostenvoranschlag_Pongau_Totalschaden.pdf",
+                "mime": "application/pdf", "size": 221_640, "page_count": 3,
+                "quality": 0.95, "doc_type": "repair_quote",
+                "ocr_text": (
+                    "Autohaus Pongau GmbH — Kostenvoranschlag Nr. 2026-08-4471\n"
+                    "Kennzeichen: JO-742 AS   Fahrgestellnummer: TMBJJ7NE9J0184552\n"
+                    "Längsträger vorne links (radiator_support, replace)\n"
+                    "A-Säule links instand setzen (a_pillar_left, repair)\n"
+                    "Airbageinheit erneuern (airbag_module, replace)\n"
+                    "Motorhaube erneuern (bonnet, replace)\n"
+                    "Kotflügel vorne links erneuern (fender_front_left, replace)\n"
+                    "Stoßstange vorne erneuern (bumper_front, replace)\n"
+                    "Strukturschaden — Richtbank erforderlich.\n"
+                    "Gesamt inkl. 20% USt: EUR 16.284,90"
+                ),
+                # The panels the quote itself prices. Seeded explicitly because the
+                # seeder stores OCR text verbatim rather than running detection over it,
+                # and the whole point of this scenario is that damage is read from the
+                # Kostenvoranschlag rather than from photographs.
+                "detections": [
+                    {"panel": "radiator_support", "action": "replace", "paint": False, "confidence": 0.93},
+                    {"panel": "a_pillar_left", "action": "repair", "paint": True, "confidence": 0.9},
+                    {"panel": "airbag_module", "action": "replace", "paint": False, "confidence": 0.95},
+                    {"panel": "bonnet", "action": "replace", "paint": True, "confidence": 0.94},
+                    {"panel": "fender_front_left", "action": "replace", "paint": True, "confidence": 0.93},
+                    {"panel": "bumper_front", "action": "replace", "paint": True, "confidence": 0.95},
+                ],
+                "fields": [
+                    ("plate", "JO-742 AS", 0.96, "accept"),
+                    ("vin", "TMBJJ7NE9J0184552", 0.94, "accept"),
+                    ("repairer_name", "Autohaus Pongau GmbH", 0.95, "accept"),
+                    ("quote_total_eur", "16284.90", 0.93, "accept"),
+                    ("quote_date", "2026-08-27", 0.97, "accept"),
+                ],
+            },
+            {
+                "kind": "photo", "filename": "IMG_4422_front.jpg", "mime": "image/jpeg",
+                "size": 2_611_004, "quality": 0.89, "doc_type": "photo",
+                "detections": [
+                    {"panel": "bumper_front", "action": "replace", "paint": True, "confidence": 0.95},
+                    {"panel": "bonnet", "action": "replace", "paint": True, "confidence": 0.94},
+                ],
+            },
+        ],
+    },
 ]
 
 

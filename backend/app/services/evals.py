@@ -26,11 +26,28 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "expect_straight_through": True,
         "expect_claim_settled_eur": 1_142.30,
         "expect_tools": ["get_claim_360", "get_extractions", "get_policy_coverage",
-                         "search_policy_wording", "get_photo_findings",
+                         "search_policy_wording", "get_damage_findings",
                          "calculate_repair_estimate", "get_risk_signals",
                          "assemble_decision_inputs", "get_template",
                          "check_total_loss_threshold", "assess_recovery"],
         "expect_settlement_eur": 1_142.30,
+    },
+    {
+        "reference": "AT-2026-004422",
+        "name": "Total loss settles on the vehicle, not the repair bill",
+        "expect_decision": "Review Required",
+        "expect_queue": "assessment",
+        "expect_grounded": True,
+        "expect_straight_through": False,
+        "expect_tools": ["get_damage_findings", "calculate_repair_estimate",
+                         "check_total_loss_threshold"],
+        # The path that had no scenario and no assertion, which is why the indemnity
+        # basis could be wrong for as long as it was. These assertions pin the three
+        # things that were broken: panels must come off the repair quote, the verdict
+        # must be a total loss, and the indemnity must be measured on the vehicle.
+        "expect_total_loss": True,
+        "expect_panels_at_least": 5,
+        "expect_indemnity_basis": "total_loss",
     },
     {
         "reference": "AT-2026-004418",
@@ -125,8 +142,10 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
                     case["expect_decision"], final.get("decision"))
         assert_that("routing", routing.get("queue") == case["expect_queue"],
                     case["expect_queue"], routing.get("queue"))
-        assert_that("policy_checks_failed", failed == sorted(case["expect_failed_checks"]),
-                    sorted(case["expect_failed_checks"]), failed)
+        if "expect_failed_checks" in case:
+            assert_that("policy_checks_failed",
+                        failed == sorted(case["expect_failed_checks"]),
+                        sorted(case["expect_failed_checks"]), failed)
         assert_that("groundedness", bool(citations) == case["expect_grounded"],
                     case["expect_grounded"], bool(citations))
 
@@ -135,6 +154,26 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
             assert_that("settlement_amount",
                         abs(actual_amount - case["expect_settlement_eur"]) < 0.01,
                         case["expect_settlement_eur"], actual_amount)
+
+        # The total-loss dimensions. These exist because the path had no scenario and no
+        # assertion, so an indemnity measured on the wrong quantity went unnoticed.
+        if "expect_total_loss" in case:
+            tl = outputs.get("total_loss") or {}
+            assert_that("total_loss_verdict",
+                        (tl.get("verdict") == "total_loss") == case["expect_total_loss"],
+                        case["expect_total_loss"], tl.get("verdict"))
+
+        if "expect_panels_at_least" in case:
+            damage = outputs.get("damage_assessment") or {}
+            count = int(damage.get("panel_count") or 0)
+            assert_that("panels_read_from_evidence",
+                        count >= case["expect_panels_at_least"],
+                        f">= {case['expect_panels_at_least']}", count)
+
+        if "expect_indemnity_basis" in case:
+            basis = (final.get("indemnity") or {}).get("basis")
+            assert_that("indemnity_basis", basis == case["expect_indemnity_basis"],
+                        case["expect_indemnity_basis"], basis)
 
         if "expect_clause" in case:
             clauses = [c.get("clause_id") for c in citations]
@@ -205,6 +244,7 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
             "pass_rate": round(passed_assertions / max(total_assertions, 1), 4),
         },
         "dimensions": ["outcome", "routing", "policy_checks_failed", "groundedness",
+                       "total_loss_verdict", "panels_read_from_evidence", "indemnity_basis",
                        "settlement_amount", "clause_cited", "security_events", "trajectory"],
         "results": results,
     }

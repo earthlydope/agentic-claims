@@ -184,6 +184,59 @@ CUSTOMERS: list[dict[str, Any]] = [
             "no_claims_years": 5, "protected_ncd": True,
         },
     },
+    {
+        "party_id": "PTY-AT-100244",
+        "first_name": "Jakob",
+        "last_name": "Steiner",
+        "date_of_birth": "1968-11-02",
+        "email": "jakob.steiner@example.at",
+        "phone": "+43 664 1002447",
+        "address_line": "Hauptstraße 41",
+        "postcode": "5600",
+        "city": "Sankt Johann im Pongau",
+        "region": "Salzburg",
+        "language": "de",
+        "customer_since": "2011-09-15",
+        "segment": "retail",
+        "persona_note": (
+            "Comprehensive on an eight-year-old estate worth less than the repair bill it "
+            "can attract. The file where the indemnity has to be measured on the vehicle "
+            "rather than on the workshop's quote — and where getting that wrong costs the "
+            "customer the difference."
+        ),
+        "vehicle": {
+            "vin": "TMBJJ7NE9J0184552",
+            "plate": "JO-742 AS",
+            "make": "Škoda",
+            "model": "Octavia Combi 2.0 TDI",
+            "year": 2018,
+            "body_type": "estate",
+            "market_value_eur": 15600.0,
+            "mileage_km": 187400,
+            "drivetrain": "diesel",
+        },
+        "policy": {
+            "policy_number": "AT-MOT-4422508",
+            "product": "Vollkasko",
+            "product_label_en": "Comprehensive",
+            "status": "active",
+            "inception_date": "2011-09-15",
+            "renewal_date": "2027-09-14",
+            "annual_premium_eur": 742.0,
+            "excess_eur": 500.0,
+            "sum_insured_eur": 15600.0,
+            "covers": ["collision", "glass", "theft", "fire", "storm", "flood", "hail",
+                       "wild_game", "vandalism"],
+            "exclusions": ["intent", "unlicensed", "intoxication"],
+            "endorsements": [
+                {"code": "ZB-MOBIL",
+                 "label": "Mobilitätsgarantie — replacement vehicle up to 14 days",
+                 "label_de": "Mobilitätsgarantie — Ersatzfahrzeug bis 14 Tage"},
+            ],
+            "no_claims_years": 11,
+            "protected_ncd": True,
+        },
+    },
 ]
 
 # Background parties exist only so the fraud graph has a real neighbourhood to walk and the
@@ -254,6 +307,22 @@ SCENARIOS: list[dict[str, Any]] = [
             "The citation rule — no authoritative clause means no material answer",
             "PG-04 coverage certainty blocking an approval",
             "A customer-safe explanation that names the clause",
+        ],
+    },
+    {
+        "key": "total_loss",
+        "title": "Total loss",
+        "party_id": "PTY-AT-100244",
+        "headline": "Structural damage past the repair option — settled on the vehicle, not the bill.",
+        "expect": (
+            "Total loss on AKKB Art 5.1.1. The indemnity is the replacement value less "
+            "salvage and excess, not the repair estimate."
+        ),
+        "demonstrates": [
+            "Panels read from the Kostenvoranschlag, not photographs alone",
+            "The repair-option threshold applied as the policyholder's right, not the test",
+            "Salvage varying with the damage rather than a flat coefficient",
+            "An indemnity measured on the vehicle where the vehicle is written off",
         ],
     },
     {

@@ -99,7 +99,7 @@ AGENT_SPECS: list[AgentSpec] = [
             "Reads the approved photo findings, assesses severity, and names the exact "
             "additional view needed where a photo cannot be read."
         ),
-        tool_scope=["get_photo_findings", "lookup_part_price"],
+        tool_scope=["get_damage_findings", "lookup_part_price"],
         cannot=["price a repair", "settle anything"],
         step_id="damage.assess",
     ),
@@ -275,7 +275,10 @@ Rules that are not yours to bend:
     "damage_assessment": f"""
 You assess vehicle damage from approved photo findings. You have no settlement tools.
 
-Call get_photo_findings. Severity is "complex" where a structural panel is involved or
+Call get_damage_findings — it returns panels from every document on the claim, not
+photographs only, and a panel seen only in an unreadable photo is reported under
+unusable_findings rather than as damage. Severity is "complex" where a structural
+panel is involved or
 four or more panels are affected; otherwise "simple". Where a photo is too poor to read,
 name the exact replacement view required.
 

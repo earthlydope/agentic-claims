@@ -456,7 +456,7 @@ def _comms_node():
         # triage rather than from the model's memory of the run.
         state = {**state, "prompt_addendum": {
             **(state.get("prompt_addendum") or {}),
-            "customer_communication": _what_to_ask_for(state),
+            "customer_communication": _comms_addendum(state),
         }}
         out = await inner(state)
         payload = (out.get("outputs") or {}).get("customer_communication") or {}
@@ -482,13 +482,44 @@ def _comms_node():
 # --------------------------------------------------------------------------
 # Routing
 # --------------------------------------------------------------------------
-def _what_to_ask_for(state: ClaimState) -> str:
-    """The instruction the message writer needs when something is being requested."""
+def _comms_addendum(state: ClaimState) -> str:
+    """What the message writer needs to know about this particular outcome.
+
+    A "Request Information" letter that does not say what information is worse than no
+    letter; so is an approval letter on a claim that pays nothing, and so is a total-loss
+    letter that never mentions a total loss. The specific instruction comes from the
+    decision and the assessment, not from the model's memory of the run.
+    """
     final = state.get("final") or {}
     decision = str(final.get("decision") or "")
     evidence = final.get("evidence") or {}
     outputs = state.get("outputs") or {}
 
+    if final.get("below_excess"):
+        return (
+            "THIS CLAIM PAYS NOTHING because the assessed amount does not exceed the "
+            "customer's excess. Use template below_excess. Say plainly, in the first "
+            "paragraph, that the damage was assessed at a figure below their Selbstbehalt "
+            "and that no payment arises, give both figures, and say the file is now "
+            "closed. Do not congratulate them and do not use the word approved."
+        )
+    if (outputs.get("total_loss") or {}).get("verdict") == "total_loss":
+        tl = outputs.get("total_loss") or {}
+        line = (
+            f"Replacement value EUR {tl.get('replacement_value_eur', 0):,.2f}, salvage "
+            f"EUR {tl.get('residual_value_eur', 0):,.2f}."
+        )
+        extra = (
+            " They retain the right under the conditions to demand the repair cost instead, "
+            "on production of an invoice from a qualified workshop — tell them so."
+            if tl.get("repair_option_available") else ""
+        )
+        return (
+            "THIS VEHICLE IS A TOTAL LOSS. Use template total_loss. Tell them so in the "
+            "first paragraph, explain that settlement is on the replacement value less the "
+            f"salvage value and their excess, and give the figures. {line}{extra} Do not "
+            "quote clause numbers to them."
+        )
     if decision != "Request Information":
         return ""
 

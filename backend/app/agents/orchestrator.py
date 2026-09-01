@@ -636,7 +636,18 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
     total = _num(estimate.get("total_cost"))
     excess = _num(coverage.get("excess_eur"))
     approving = decision.lower() in ("approved", "approve", "auto-approved")
-    settlement = round(max(total - excess, 0.0), 2) if approving else 0.0
+
+    indemnity = _indemnity_basis(out, claim, gross_repair=total)
+    settlement = round(max(indemnity["gross"] - excess, 0.0), 2) if approving else 0.0
+
+    # A claim whose indemnity does not clear the excess pays nothing. The cover position
+    # is still "approved" — that is what the guard evaluates — but the outcome is a nil
+    # settlement, and the file closes rather than promising money. Telling a customer a
+    # claim is "geprüft und freigegeben" when nothing will be paid is the wrong answer on
+    # the highest-frequency small motor claim there is.
+    below_excess = approving and 0.0 < indemnity["gross"] <= excess
+    if below_excess:
+        settlement = 0.0
 
     claimed_estimate = proposal.get("estimate") or {}
 
@@ -645,6 +656,8 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
         "decision": decision,
         "reasoning": proposal.get("reasoning"),
         "settlement_amount_eur": settlement,
+        "indemnity": indemnity,
+        "below_excess": below_excess,
         "severity": damage.get("severity") or claim.severity,
         "structural_damage": bool(damage.get("structural_damage")),
         # Never taken from the model: the claim record is the authority on injury.
@@ -683,6 +696,63 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
             "total_cost": _num(claimed_estimate.get("total_cost")),
             "settlement_amount_eur": _num(proposal.get("settlement_amount_eur")),
         },
+    }
+
+
+def _indemnity_basis(
+    out: dict[str, Any], claim: Claim, *, gross_repair: float
+) -> dict[str, Any]:
+    """What the indemnity is measured on, before the excess comes off.
+
+    The repair estimate is only the basis where the vehicle is being repaired. On a total
+    loss the basis is the replacement value less salvage (AKKB Art 5.1.2), and where the
+    schedule carries Neuwertersatz and the vehicle is inside the endorsement's window the
+    basis is the new price instead. Settling every claim on the repair estimate — which is
+    what this did — underpays a total loss by the whole difference between a repair bill
+    and a vehicle, and makes the Neuwertersatz endorsement sold to the customer inert.
+    """
+    total_loss = out.get("total_loss") or {}
+    verdict = str(total_loss.get("verdict") or "")
+
+    if verdict != "total_loss":
+        return {
+            "basis": "repair_cost",
+            "gross": round(gross_repair, 2),
+            "clause": "AKKB Art 5.2",
+            "explanation": "Partial damage: the indemnity is the cost of restoring the vehicle.",
+        }
+
+    replacement = _num(total_loss.get("replacement_value_eur"))
+    residual = _num(total_loss.get("residual_value_eur"))
+    payable = _num(total_loss.get("payable_on_total_loss_eur")) or round(
+        max(replacement - residual, 0.0), 2
+    )
+
+    # Neuwertersatz, where the schedule actually carries it and the age test passes.
+    endorsements = (out.get("coverage") or {}).get("endorsements") or []
+    has_new_for_old = any(
+        (e.get("code") or "").upper() == "ZB-NEUWERT" for e in endorsements
+    )
+    if has_new_for_old and bool(total_loss.get("new_for_old_available")):
+        new_price = _num(total_loss.get("new_price_eur")) or round(replacement * 1.35, 2)
+        return {
+            "basis": "new_for_old",
+            "gross": round(max(new_price - residual, 0.0), 2),
+            "clause": "AKKB Art 5.1.2 · ZB-NEUWERT",
+            "explanation": (
+                "Total loss inside the Neuwertersatz window, so the basis is the new price "
+                "rather than the replacement value, less salvage."
+            ),
+        }
+
+    return {
+        "basis": "total_loss",
+        "gross": payable,
+        "clause": "AKKB Art 5.1.1 · 5.1.2",
+        "explanation": (
+            f"Total loss: replacement value EUR {replacement:,.2f} less salvage of "
+            f"EUR {residual:,.2f}."
+        ),
     }
 
 
@@ -842,6 +912,16 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
         # decision of "Review Required" means review is required, whether the guard
         # forced it or the agent asked for it itself, and the queue is derived from the
         # claim's own signals rather than from what the model said about them.
+        if enforced.get("below_excess"):
+            return {
+                "needs_human": False, "queue": None, "reason": "below_excess",
+                "reason_detail": (
+                    "The assessed amount does not exceed the excess, so there is nothing "
+                    "to pay and nothing to approve."
+                ),
+                "signing_agent": "DecisionAgent",
+                "failed_checks": [],
+            }
         if decision.lower() in ("approved", "approve", "auto-approved"):
             return {
                 "needs_human": False, "queue": None, "reason": "straight_through",
@@ -976,7 +1056,13 @@ def _apply_write(
     )
     claim.assigned_queue = routing.get("queue")
 
-    if not routing["needs_human"] and decision == "Approved":
+    if not routing["needs_human"] and decision == "Approved" and enforced.get("below_excess"):
+        claim.status = "closed_without_payment"
+        claim.stage = "closed"
+        claim.settlement_amount_eur = 0.0
+        claim.straight_through = True
+        claim.closed_at = dt.datetime.now(dt.timezone.utc)
+    elif not routing["needs_human"] and decision == "Approved":
         claim.status = "approved"
         claim.stage = "settlement"
         claim.settlement_amount_eur = float(enforced.get("settlement_amount_eur") or 0.0)
