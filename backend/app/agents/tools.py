@@ -308,21 +308,35 @@ def get_damage_findings() -> dict[str, Any]:
             by_panel[key] = row
             panels.append(row)
 
-    structural = any(p["structural"] for p in panels)
-    severity = "complex" if structural or len(panels) >= 4 else "simple"
+    # Severity counts what was *seen*, priced or not. A structural panel visible only in a
+    # photo too poor to price is still a reason not to settle the claim autonomously — the
+    # honest reading is "structural damage is suspected and cannot be measured", which is
+    # more cautious than pricing it, not less. Suppressing it downgraded the claim to
+    # simple and removed the PG-02 block that structural damage exists to trigger.
+    suspected_structural = any(
+        (u.get("panel") or "") in STRUCTURAL_PANELS for u in unusable
+    )
+    structural = any(p["structural"] for p in panels) or suspected_structural
+    seen_count = len(panels) + len(unusable)
+    severity = "complex" if structural or seen_count >= 4 else "simple"
 
     return {
         "data": {
             "panels": panels,
             "panel_count": len(panels),
             "structural_damage": structural,
+            "structural_unconfirmed": suspected_structural and not any(
+                p["structural"] for p in panels
+            ),
             "severity": severity,
             "low_quality_photos": low_quality,
             "unusable_findings": unusable,
             "missing_views": [u["ask"] for u in unusable],
             "severity_basis": (
-                "structural panel detected" if structural
-                else f"{len(panels)} panel(s) affected"
+                "structural panel suspected in evidence too poor to measure"
+                if suspected_structural and not any(p["structural"] for p in panels)
+                else "structural panel detected" if structural
+                else f"{seen_count} panel(s) affected"
             ),
         },
         "provenance": {

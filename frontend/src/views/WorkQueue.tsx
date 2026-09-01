@@ -8,6 +8,26 @@ import { useBilingual, useEnum, useMoney, useReasonDetail, useT } from '../lib/i
 import { num, when } from '../lib/format'
 import type { Json, Persona, WorkTask } from '../types'
 
+/**
+ * Which outcomes each queue accepts. Mirrors QUEUE_VERBS in the backend.
+ *
+ * A queue is not a generic decision slot: an assessment task takes a technical
+ * confirmation, an SIU task a release or a referral, a recovery task an outcome on the
+ * recovery — and none of them takes a settlement approval. Rendering the same four
+ * settlement buttons everywhere is what left an assessor unable to confirm a total loss
+ * from the screen even after the backend allowed it.
+ */
+const VERBS_FOR_QUEUE: Record<string, string[]> = {
+  handler:    ['approve', 'amend', 'request_more', 'reject'],
+  coverage:   ['approve', 'amend', 'request_more', 'reject'],
+  operations: ['approve', 'amend', 'request_more', 'reject'],
+  large_loss: ['approve', 'amend', 'request_more', 'reject'],
+  injury:     ['approve', 'amend', 'request_more', 'reject'],
+  assessment: ['confirm', 'request_more', 'reject'],
+  siu:        ['release', 'refer', 'request_more'],
+  recovery:   ['recovered', 'no_recovery', 'request_more'],
+}
+
 /** One queue view, framed for whoever is looking at it. Keys, so it follows the language. */
 const FRAMING: Record<string, { title: string; lede: string; empty: string }> = {
   work_queue:       { title: 'wq.myDesk',    lede: 'wq.myDeskLede',    empty: 'wq.myDeskEmpty' },
@@ -465,18 +485,26 @@ function TaskDetail({
                   </label>
                 </div>
                 <div className="flex gap-2 mt-4 flex-wrap">
-                  <Button onClick={() => decide('approve')} busy={busy}>
-                    Approve {eur(task.proposed_amount_eur)}
-                  </Button>
-                  <Button variant="secondary" onClick={() => decide('amend')} busy={busy}>
-                    Approve {eur(Number(amount) || 0)} instead
-                  </Button>
-                  <Button variant="secondary" onClick={() => decide('request_more')} busy={busy}>
-                    Ask for more
-                  </Button>
-                  <Button variant="danger" onClick={() => decide('reject')} busy={busy}>
-                    Reject
-                  </Button>
+                  {(VERBS_FOR_QUEUE[task.queue] ?? VERBS_FOR_QUEUE.handler).map((verb: string) => (
+                    <Button
+                      key={verb}
+                      variant={
+                        verb === 'approve' || verb === 'confirm' || verb === 'recovered'
+                          ? 'primary'
+                          : verb === 'reject'
+                            ? 'danger'
+                            : 'secondary'
+                      }
+                      onClick={() => decide(verb)}
+                      busy={busy}
+                    >
+                      {verb === 'approve'
+                        ? `${t('wq.approve')} ${eur(task.proposed_amount_eur)}`
+                        : verb === 'amend'
+                          ? `${t('wq.approve')} ${eur(Number(amount) || 0)} ${t('wq.instead')}`
+                          : t(`wq.verb.${verb}`)}
+                    </Button>
+                  ))}
                 </div>
               </>
             )}

@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.claimants import scenario_by_key
 from app.lifecycle import status_meta
+from app.personas import persona as get_persona
 from app.semantic import query_api
 from app.services.metrics import messages_for
 from app.services.ingest import ingest
@@ -135,10 +136,27 @@ def _claim_summary(c, parties, vehicles, policies, open_tasks) -> dict[str, Any]
 
 
 @router.get("/{reference}")
-def get_claim(reference: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_claim(
+    reference: str,
+    persona: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """One claim, scoped to whoever is asking.
+
+    A customer gets their own claim without the internal view of it. Gating this in the
+    browser alone was the same mistake in a different place: the payload still carried the
+    fraud score, the risk signals, the guard checks and the run trace to anyone who asked
+    for the URL, and the outbound guard exists precisely to keep those away from a
+    claimant.
+    """
     claim = db.get(Claim, reference)
     if claim is None:
         raise HTTPException(404, f"Claim {reference} not found.")
+
+    viewer = get_persona(persona) if persona else None
+    if viewer is not None and viewer.kind == "customer":
+        if claim.party_id != viewer.party_id:
+            raise HTTPException(404, f"Claim {reference} not found.")
 
     parties = {p.party_id: p for p in db.scalars(select(Party)).all()}
     vehicles = {v.vin: v for v in db.scalars(select(Vehicle)).all()}
@@ -189,7 +207,7 @@ def get_claim(reference: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         select(ReviewTask).where(ReviewTask.claim_reference == reference)
     ).all()
 
-    return {
+    payload: dict[str, Any] = {
         "claim": {
             **_claim_summary(claim, parties, vehicles, policies, open_tasks),
             "fnol_text": claim.fnol_text,
@@ -242,6 +260,50 @@ def get_claim(reference: str, db: Session = Depends(get_db)) -> dict[str, Any]:
         # while a run is in flight.
         "trace": _last_trace(db, reference),
     }
+
+    if viewer is not None and viewer.kind == "customer":
+        payload = _for_the_customer(payload)
+    return payload
+
+
+# What a claimant is never shown, however they reach the claim.
+#
+# The outbound guard screens customer *messages* for these; a URL routed around it. Gating
+# it in the browser alone left the payload carrying the fraud score, the signals behind it,
+# the guard checks and the whole run trace to anyone who asked.
+_INTERNAL_CLAIM_FIELDS = (
+    "fraud_score", "assigned_queue", "assigned_to", "open_task", "scenario",
+    "scenario_key", "straight_through", "human_touches", "evidence_completeness",
+)
+_INTERNAL_SECTIONS = ("risk", "tasks", "trace")
+
+
+def _for_the_customer(payload: dict[str, Any]) -> dict[str, Any]:
+    """The claim as its own policyholder may see it."""
+    claim = {
+        k: v for k, v in (payload.get("claim") or {}).items()
+        if k not in _INTERNAL_CLAIM_FIELDS
+    }
+    out = {
+        k: v for k, v in payload.items()
+        if k not in _INTERNAL_SECTIONS and k != "claim"
+    }
+    out["claim"] = claim
+
+    # Documents stay, because they are the customer's own uploads — but the platform's
+    # reading of them does not, and neither does anything a guard withheld.
+    out["documents"] = [
+        {
+            k: v for k, v in (d or {}).items()
+            if k in ("doc_id", "filename", "mime_type", "size_bytes", "page_count",
+                     "doc_type", "uploaded_at", "quality_action")
+        }
+        for d in (payload.get("documents") or [])
+    ]
+    out["messages"] = [
+        m for m in (payload.get("messages") or []) if (m or {}).get("status") != "blocked"
+    ]
+    return out
 
 
 def _last_trace(db: Session, reference: str) -> list[dict[str, Any]]:

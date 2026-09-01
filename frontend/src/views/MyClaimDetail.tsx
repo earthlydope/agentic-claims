@@ -72,8 +72,13 @@ export function MyClaimDetail({
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(() => {
-    api.claim(reference).then(setDetail).catch((e: Error) => setError(e.message))
-  }, [reference])
+    // The persona goes with the request, so the *payload* is redacted rather than just the
+    // rendering. Hiding the fraud score in the browser left it one URL away.
+    api
+      .claim(reference, persona.key)
+      .then(setDetail)
+      .catch((e: Error) => setError(e.message))
+  }, [reference, persona.key])
 
   useEffect(() => { load() }, [load])
 

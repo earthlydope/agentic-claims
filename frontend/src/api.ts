@@ -95,7 +95,8 @@ export const api = {
 
   claims: (liveOnly = false) =>
     get(`/claims${liveOnly ? '?live_only=true' : ''}`),
-  claim: (ref: string) => get(`/claims/${ref}`),
+  claim: (ref: string, persona?: string) =>
+    get(`/claims/${ref}` + (persona ? `?persona=${encodeURIComponent(persona)}` : '')),
   intake: (body: Json) => post('/claims/intake', body),
   /** File a claim with real documents attached. */
   intakeUpload: async (form: FormData) => {
