@@ -5,6 +5,7 @@ import { CoworkerDock } from './components/CoworkerDock'
 import { Button, ErrorNote, Spinner } from './components/ui'
 import { LanguageProvider, useT } from './lib/i18n'
 import { MyClaims } from './views/MyClaims'
+import { MyClaimDetail } from './views/MyClaimDetail'
 import { MyPolicies } from './views/MyPolicies'
 import { ModelUsage } from './views/ModelUsage'
 import { WorkQueue } from './views/WorkQueue'
@@ -101,6 +102,19 @@ function Platform() {
   const view = () => {
     // A claim reference in the URL opens the file, whichever view you came from.
     if (param.startsWith('AT-2')) {
+      // A customer opening their own claim gets a customer's view of it. The workbench
+      // carries the run trace, the firewall verdict, the policy checks and the risk
+      // picture — everything the outbound guard exists to keep away from a claimant.
+      if (active.kind === 'customer') {
+        return (
+          <MyClaimDetail
+            key={param}
+            reference={param}
+            persona={active}
+            onBack={() => go(`${active.key}/${feature}`)}
+          />
+        )
+      }
       return (
         <ClaimWorkbench
           key={param}

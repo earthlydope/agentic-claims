@@ -32,6 +32,7 @@ from app.models import (
     Vehicle,
 )
 from app.claimants import scenario_by_key
+from app.lifecycle import status_meta
 from app.semantic import query_api
 from app.services.metrics import messages_for
 from app.services.ingest import ingest
@@ -76,9 +77,13 @@ def _claim_summary(c, parties, vehicles, policies, open_tasks) -> dict[str, Any]
     policy = policies.get(c.policy_number)
     task = open_tasks.get(c.reference)
     scenario = scenario_by_key(c.scenario_key) if c.scenario_key else None
+    meta = status_meta(c.status)
     return {
         "reference": c.reference,
         "status": c.status,
+        # The status in both languages, so a view can label it without a second lookup.
+        "status_meta": meta,
+        "status_tone": meta.get("tone"),
         "stage": c.stage,
         "decision": c.decision,
         "settlement_amount_eur": c.settlement_amount_eur,
