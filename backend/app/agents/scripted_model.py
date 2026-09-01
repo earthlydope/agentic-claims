@@ -132,19 +132,28 @@ def _synth_document_understanding(results: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Which exclusions the recorded facts actually engage. Deliberately conservative: an
-# exclusion only bites where the claim carries a fact supporting it, because a policy
-# listing "intoxication" is not evidence that anyone was drunk.
-def _EXCLUSIONS_ON_CLAIM(cov: dict[str, Any]) -> set[str]:
+# Which exclusions the recorded facts actually engage.
+#
+# An exclusion only bites where the claim carries a fact supporting it: a policy listing
+# "intoxication" is not evidence that anyone was drunk. Only `at_fault` is currently a
+# recorded fact — the driver's identity, licence status and sobriety are not captured at
+# FNOL and are not on the Claim model, so `unlicensed`, `intoxication` and `intent` cannot
+# be evaluated at all. An earlier version of this read four keys that exist nowhere in the
+# schema and therefore returned the empty set on every claim while appearing to work.
+#
+# Naming the gap is the honest thing to do here: the exclusions are shown to the customer
+# on their own policy screen, and the platform cannot yet apply three of them.
+UNEVALUABLE_EXCLUSIONS = frozenset({"unlicensed", "intoxication", "intent", "motorsport"})
+
+
+def _exclusions_engaged(cov: dict[str, Any], policy_exclusions: set[str]) -> set[str]:
     incident = cov.get("incident") or {}
     engaged: set[str] = set()
-    if incident.get("driver_unlicensed"):
-        engaged.add("unlicensed")
-    if incident.get("driver_intoxicated"):
-        engaged.add("intoxication")
-    if incident.get("deliberate"):
-        engaged.add("intent")
-    if incident.get("type") in COLLISION_PERILS and incident.get("at_fault") == "policyholder":
+    if (
+        "at_fault_collision" in policy_exclusions
+        and incident.get("type") in COLLISION_PERILS
+        and bool(cov.get("at_fault"))
+    ):
         engaged.add("at_fault_collision")
     return engaged
 
@@ -168,7 +177,7 @@ def _synth_coverage(results: dict[str, Any]) -> dict[str, Any]:
     # Exclusions are checked for every product, not only for Teilkasko collisions. An
     # earlier version consulted exactly one exclusion and let every comprehensive claim
     # through, so intent, motorsport and unlicensed driving were unreachable positions.
-    breached = sorted(exclusions & _EXCLUSIONS_ON_CLAIM(cov))
+    breached = sorted(_exclusions_engaged(cov, exclusions))
 
     if not in_force:
         status = "lapsed"
@@ -422,6 +431,11 @@ def _synth_total_loss(results: dict[str, Any]) -> dict[str, Any]:
         "threshold": t.get("threshold", 0.70),
         "residual_value_eur": t.get("residual_value_eur", 0.0),
         "payable_on_total_loss_eur": t.get("payable_on_total_loss_eur", 0.0),
+        "on_vehicle_basis_eur": t.get("on_vehicle_basis_eur", 0.0),
+        "new_for_old_available": bool(t.get("new_for_old_available")),
+        "new_price_eur": t.get("new_price_eur", 0.0),
+        "total_loss_basis": t.get("total_loss_basis", ""),
+        "repair_option_available": bool(t.get("repair_option_available")),
         "citations": wording.get("citations") or [],
         "reasoning": (
             f"{t.get('basis', '')} "
@@ -532,7 +546,33 @@ def _synth_comms(results: dict[str, Any]) -> dict[str, Any]:
 
     # The body is driven by the approved template, not by the internal decision string,
     # so the two can never disagree.
-    if template_id == "claim_approved":
+    if template_id == "below_excess":
+        gross = float((final.get("indemnity") or {}).get("gross") or 0.0)
+        excess = float(coverage.get("excess_eur") or 0.0)
+        lines.append(
+            f"Der ermittelte Schaden beträgt EUR {gross:,.2f}, Ihr Selbstbehalt "
+            f"EUR {excess:,.2f}. Damit kommt es zu keiner Zahlung und wir schließen den "
+            "Akt. Sollten sich die Reparaturkosten erhöhen, melden Sie sich bitte."
+            if de
+            else f"The assessed amount is EUR {gross:,.2f} against your excess of "
+                 f"EUR {excess:,.2f}, so no payment arises and we are closing the file. "
+                 "If the repair turns out to cost more, please come back to us."
+        )
+    elif template_id == "total_loss":
+        tl = outputs.get("total_loss") or {}
+        amount = float(final.get("settlement_amount_eur") or 0.0)
+        lines.append(
+            f"Der Wiederbeschaffungswert beträgt EUR "
+            f"{float(tl.get('replacement_value_eur') or 0.0):,.2f}, der Restwert "
+            f"EUR {float(tl.get('residual_value_eur') or 0.0):,.2f}. Nach Abzug des "
+            f"Selbstbehalts überweisen wir EUR {amount:,.2f}."
+            if de
+            else f"The replacement value is EUR "
+                 f"{float(tl.get('replacement_value_eur') or 0.0):,.2f} and the salvage "
+                 f"value EUR {float(tl.get('residual_value_eur') or 0.0):,.2f}. After your "
+                 f"excess we will settle EUR {amount:,.2f}."
+        )
+    elif template_id == "claim_approved":
         amount = float(final.get("settlement_amount_eur") or 0.0)
         excess = float(coverage.get("excess_eur") or 0.0)
         lines.append(
@@ -660,7 +700,17 @@ def _comms_args(results: dict[str, Any]) -> dict[str, Any]:
     claim_injury = (outputs.get("intake_orchestrator") or {}).get("injury_reported")
     fraud = (outputs.get("fraud_risk") or {}).get("above_threshold")
 
-    if decision == "Approved":
+    total_loss = (outputs.get("total_loss") or {}).get("verdict") == "total_loss"
+
+    # A nil settlement is not an approval to the person receiving it, and a written-off
+    # vehicle is not "assessed and approved". Both were added as approved templates and
+    # neither was ever selected, so the customer on a below-excess claim was still told
+    # their claim was "geprüft und freigegeben" with EUR 0.00 attached.
+    if final.get("below_excess"):
+        tpl = "below_excess"
+    elif decision == "Approved" and total_loss:
+        tpl = "total_loss"
+    elif decision == "Approved":
         tpl = "claim_approved"
     elif decision == "Declined" or coverage_status in ("excluded", "lapsed"):
         tpl = "coverage_declined"

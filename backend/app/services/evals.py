@@ -48,6 +48,11 @@ GOLDEN_CASES: list[dict[str, Any]] = [
         "expect_total_loss": True,
         "expect_panels_at_least": 5,
         "expect_indemnity_basis": "total_loss",
+        # The indemnity must be the *lower* of the repair cost and the vehicle basis.
+        # Paying the vehicle where a repair is cheaper breaches the Bereicherungsverbot,
+        # and an earlier version of this did exactly that between 70 per cent of value and
+        # the true total-loss point.
+        "expect_settlement_not_above_eur": 11_395.36,
     },
     {
         "reference": "AT-2026-004418",
@@ -175,6 +180,12 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
             assert_that("indemnity_basis", basis == case["expect_indemnity_basis"],
                         case["expect_indemnity_basis"], basis)
 
+        if "expect_settlement_not_above_eur" in case:
+            amount = round(float(final.get("settlement_amount_eur") or 0.0), 2)
+            assert_that("indemnity_not_above_repair",
+                        amount <= case["expect_settlement_not_above_eur"] + 0.01,
+                        f"<= {case['expect_settlement_not_above_eur']}", amount)
+
         if "expect_clause" in case:
             clauses = [c.get("clause_id") for c in citations]
             assert_that("clause_cited", case["expect_clause"] in clauses,
@@ -245,6 +256,7 @@ async def run_evaluations(db: Session, mode: str | None = None) -> dict[str, Any
         },
         "dimensions": ["outcome", "routing", "policy_checks_failed", "groundedness",
                        "total_loss_verdict", "panels_read_from_evidence", "indemnity_basis",
+                       "indemnity_not_above_repair",
                        "settlement_amount", "clause_cited", "security_events", "trajectory"],
         "results": results,
     }

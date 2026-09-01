@@ -343,7 +343,9 @@ Never move the threshold. It is policy wording, not a setting.
 {JSON_ONLY} Shape:
 {{"verdict": "economically_repairable|total_loss|borderline", "repair_cost_eur": float,
   "replacement_value_eur": float, "ratio": float, "threshold": float,
-  "residual_value_eur": float, "payable_on_total_loss_eur": float, "reasoning": str,
+  "residual_value_eur": float, "payable_on_total_loss_eur": float,
+  "on_vehicle_basis_eur": float, "new_for_old_available": bool, "new_price_eur": float,
+  "total_loss_basis": str, "repair_option_available": bool, "reasoning": str,
   "citations": [object], "summary": str}}
 """,
     "recovery": f"""

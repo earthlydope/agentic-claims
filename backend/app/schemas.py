@@ -175,6 +175,14 @@ class RepairabilityVerdict(Strict):
     threshold: float = 0.70
     residual_value_eur: Eur = 0.0
     payable_on_total_loss_eur: Eur = 0.0
+    # The vehicle basis and the Neuwertersatz inputs. Carried on the contract because an
+    # indemnity that cannot see them silently falls back to the repair estimate — which is
+    # how the endorsement stayed inert while appearing to work in deterministic mode.
+    on_vehicle_basis_eur: Eur = 0.0
+    new_for_old_available: bool = False
+    new_price_eur: Eur = 0.0
+    total_loss_basis: str = ""
+    repair_option_available: bool = False
     reasoning: str
     citations: list[Citation] = []
     summary: str = ""

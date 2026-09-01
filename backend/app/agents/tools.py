@@ -510,7 +510,10 @@ def _derive_risk_signals(ctx: Any) -> list[dict[str, Any]]:
     counts = sorted(per_party.values()) or [1]
     median = counts[len(counts) // 2]
 
-    if mine_count >= max(4, median * 2):
+    # median + 2 rather than median x 2: on a book with a median of five claims per party
+    # a doubling puts the bar at ten and switches the indicator off entirely, which is the
+    # opposite failure from firing on everybody.
+    if mine_count >= max(3, median + 2):
         signals.append({
             "signal_type": "claim_velocity",
             "detail": (
@@ -530,13 +533,27 @@ def _derive_risk_signals(ctx: Any) -> list[dict[str, Any]]:
         })
 
     # The same repairer across the party's claims, read off the documents.
+    # Deliberately scoped to the party's *other* claims. Querying every extraction row
+    # matched the claim's own repairer against itself, so the signal fired on any claim
+    # with a quote attached — an artefact, not an indicator.
+    sibling_docs = {
+        d.doc_id
+        for d in ctx.db.scalars(
+            select(Document).where(
+                Document.claim_reference.in_([c.reference for c in siblings])
+            )
+        ).all()
+    } if siblings else set()
     repairers = {
         f.extracted_value
         for f in ctx.db.scalars(
-            select(ExtractedField).where(ExtractedField.field_name == "repairer_name")
+            select(ExtractedField).where(
+                ExtractedField.field_name == "repairer_name",
+                ExtractedField.doc_id.in_(sibling_docs),
+            )
         ).all()
         if f.extracted_value
-    } if siblings else set()
+    } if sibling_docs else set()
     mine = {
         f.extracted_value
         for d in ctx.db.scalars(
@@ -895,16 +912,30 @@ def check_total_loss_threshold() -> dict[str, Any]:
     if not replacement or not repair_cost:
         verdict = "borderline"
     elif recovery_cost > replacement:
+        # Limb 1, and the only thing that makes a Totalschaden: repair is uneconomic.
         verdict, basis_reason = "total_loss", "recovery_cost_exceeds_value"
     elif ratio > repair_option_threshold:
-        verdict, basis_reason = "total_loss", "above_repair_option_threshold"
-    elif ratio > repair_option_threshold - 0.05 or recovery_cost > replacement * 0.95:
+        # Above 70 the policyholder loses the right to *demand* repair — but losing that
+        # right does not make the vehicle a total loss, and the conditions do not say it
+        # does. The file still needs an assessor because a repair at three-quarters of the
+        # vehicle's value is worth looking at, so it is borderline rather than written off.
+        verdict, basis_reason = "borderline", "above_repair_option_threshold"
+    elif recovery_cost > replacement * 0.95:
         verdict = "borderline"
     else:
         verdict = "economically_repairable"
 
     repair_option_available = bool(replacement) and ratio <= repair_option_threshold
-    payable = round(max(replacement - residual, 0.0), 2) if verdict == "total_loss" else 0.0
+
+    # The indemnity is never more than it costs to put the policyholder back where they
+    # were. Paying the replacement value less salvage where a proper repair is available
+    # for less would breach the Bereicherungsverbot (§ 55 VersVG) and no insurer would do
+    # it. So the ceiling is the lower of the two, whatever the verdict is called: on a
+    # true total loss the repair is the higher figure by definition, and between 70 per
+    # cent and that point the repair is still the cheaper way to settle.
+    on_vehicle = round(max(replacement - residual, 0.0), 2)
+    payable = min(repair_cost, on_vehicle) if replacement and repair_cost else 0.0
+    payable = round(payable, 2)
 
     if basis_reason == "recovery_cost_exceeds_value":
         basis = (
@@ -915,9 +946,11 @@ def check_total_loss_threshold() -> dict[str, Any]:
     elif basis_reason == "above_repair_option_threshold":
         basis = (
             f"Repair is {ratio * 100:.1f}% of replacement value, above the 70% at which "
-            "AKKB Art 5.1.1 gives the policyholder the right to demand the repair cost. "
-            f"Settled on a total-loss basis: EUR {replacement:,.2f} less salvage of "
-            f"EUR {residual:,.2f}."
+            "AKKB Art 5.1.1 gives the policyholder the right to demand the repair cost — "
+            "but repair plus salvage is still within the replacement value, so this is not "
+            f"a total loss on the first limb. Settle at the lower of repair "
+            f"EUR {repair_cost:,.2f} and the vehicle basis EUR {on_vehicle:,.2f}, and have "
+            "an assessor look at it."
         )
     else:
         basis = (
@@ -943,6 +976,8 @@ def check_total_loss_threshold() -> dict[str, Any]:
             "new_for_old_available": bool(valuation.get("new_for_old_available")),
             "new_price_eur": _num_or_zero(valuation.get("new_price_eur")),
             "payable_on_total_loss_eur": payable,
+            "indemnity_ceiling_eur": payable,
+            "on_vehicle_basis_eur": on_vehicle,
             "basis": basis,
         },
         "provenance": {

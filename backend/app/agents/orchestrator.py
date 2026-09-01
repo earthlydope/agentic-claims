@@ -714,6 +714,91 @@ def _indemnity_basis(
 ) -> dict[str, Any]:
     """What the indemnity is measured on, before the excess comes off.
 
+    One rule, three ways of arriving at it. The repair estimate is the basis while the
+    vehicle is worth repairing; on a total loss the basis is the replacement value less
+    salvage (AKKB Art 5.1.2); and where the schedule carries Neuwertersatz and the vehicle
+    is inside the endorsement's window the basis is the new price instead.
+
+    In every case the indemnity is capped at the *lower* of the repair cost and the vehicle
+    basis. Paying more than it costs to restore the vehicle would breach the
+    Bereicherungsverbot in § 55 VersVG, and an earlier version of this did exactly that
+    between 70 per cent of value and the true total-loss point — settling on the vehicle
+    where a repair was available for less.
+    """
+    total_loss = out.get("total_loss") or {}
+    verdict = str(total_loss.get("verdict") or "")
+    replacement = _num(total_loss.get("replacement_value_eur"))
+    residual = _num(total_loss.get("residual_value_eur"))
+    on_vehicle = _num(total_loss.get("on_vehicle_basis_eur")) or round(
+        max(replacement - residual, 0.0), 2
+    )
+
+    # Neuwertersatz, where the schedule actually carries it and the vehicle is in window.
+    # Read off the policy, never from the model: an endorsement is a fact on the schedule.
+    if verdict == "total_loss" and replacement:
+        endorsements = _endorsements_on(claim)
+        has_new_for_old = any(
+            (e.get("code") or "").upper() == "ZB-NEUWERT" for e in endorsements
+        )
+        if has_new_for_old and bool(total_loss.get("new_for_old_available")):
+            new_price = _num(total_loss.get("new_price_eur")) or round(
+                replacement * 1.35, 2
+            )
+            return {
+                "basis": "new_for_old",
+                "gross": round(max(new_price - residual, 0.0), 2),
+                "clause": "AKKB Art 5.1.2 · ZB-NEUWERT",
+                "explanation": (
+                    "Total loss inside the Neuwertersatz window, so the basis is the new "
+                    "price rather than the replacement value, less salvage."
+                ),
+            }
+
+    if verdict == "total_loss":
+        return {
+            "basis": "total_loss",
+            "gross": on_vehicle,
+            "clause": "AKKB Art 5.1.1 · 5.1.2",
+            "explanation": (
+                f"Total loss: replacement value EUR {replacement:,.2f} less salvage of "
+                f"EUR {residual:,.2f}. Repair would cost more than the vehicle is worth."
+            ),
+        }
+
+    if verdict == "borderline" and on_vehicle and gross_repair > on_vehicle:
+        return {
+            "basis": "capped_at_vehicle_value",
+            "gross": on_vehicle,
+            "clause": "AKKB Art 5.2 · § 55 VersVG",
+            "explanation": (
+                f"Repair at EUR {gross_repair:,.2f} exceeds the vehicle basis of "
+                f"EUR {on_vehicle:,.2f}, so the indemnity is capped there."
+            ),
+        }
+
+    return {
+        "basis": "repair_cost",
+        "gross": round(gross_repair, 2),
+        "clause": "AKKB Art 5.2",
+        "explanation": "Partial damage: the indemnity is the cost of restoring the vehicle.",
+    }
+
+
+def _endorsements_on(claim: Claim) -> list[dict[str, Any]]:
+    """The endorsements the policy schedule actually carries."""
+    from app.db import SessionLocal
+    from app.models import Policy
+
+    session = Session.object_session(claim) or SessionLocal()
+    policy = session.get(Policy, claim.policy_number)
+    return list(policy.endorsements or []) if policy else []
+
+
+def _indemnity_basis(
+    out: dict[str, Any], claim: Claim, *, gross_repair: float
+) -> dict[str, Any]:
+    """What the indemnity is measured on, before the excess comes off.
+
     The repair estimate is only the basis where the vehicle is being repaired. On a total
     loss the basis is the replacement value less salvage (AKKB Art 5.1.2), and where the
     schedule carries Neuwertersatz and the vehicle is inside the endorsement's window the
