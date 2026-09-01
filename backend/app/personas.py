@@ -441,6 +441,7 @@ QUEUE_OWNERS: dict[str, tuple[str, ...]] = {
     "coverage": ("claim_handler",),
     "assessment": ("motor_assessor",),
     "operations": ("compliance_ops",),
+    "large_loss": ("compliance_ops",),
     "injury": ("compliance_ops",),
     "siu": ("siu",),
 }

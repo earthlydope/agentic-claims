@@ -985,6 +985,7 @@ def _routing_for(guard, enforced: dict[str, Any], claim: Claim) -> dict[str, Any
 
 AUTHORITY_BY_QUEUE: dict[str, str] = {
     "operations": "compliance_ops",
+    "large_loss": "compliance_ops",
     "supervisor": "compliance_ops",   # older name for the same queue
     "injury": "compliance_ops",
     "siu": "siu",

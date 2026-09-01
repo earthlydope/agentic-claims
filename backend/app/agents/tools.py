@@ -514,6 +514,16 @@ def create_review_task(
     from app.models import ReviewTask
 
     ctx = run_context()
+
+    # The figure on the task is the one the guard enforced, never the one the model
+    # proposed. They differ on exactly the claims where it matters most: on a total loss
+    # the enforced indemnity is the vehicle less salvage, while the proposal carries the
+    # repair estimate — so an approver was being asked to authorise a figure thousands of
+    # euro below what the claim is actually worth.
+    enforced = (ctx.agent_outputs or {}).get("_final") or {}
+    if "settlement_amount_eur" in enforced:
+        proposed_amount_eur = float(enforced.get("settlement_amount_eur") or 0.0)
+
     authority = (
         "compliance_ops"
         if proposed_amount_eur > AUTHORITY_LIMITS_EUR["claim_handler"]

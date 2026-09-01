@@ -217,7 +217,7 @@ class ReviewTaskCreated(Strict):
 
     task_id: str = ""
     queue: Literal["handler", "coverage", "assessment", "operations", "supervisor",
-                   "injury", "siu",
+                   "injury", "siu", "large_loss",
                    "security"]
     authority_required: str = ""
     reason: str = ""

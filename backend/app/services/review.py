@@ -22,7 +22,19 @@ from app.services import ledger
 from app.zero_trust.crypto_guard import sign_action
 from app.zero_trust.write_gateway import gateway
 
-DECISIONS = ("approve", "amend", "reject", "request_more")
+# Acts that move money, and acts that record a professional judgement. Conflating the two
+# was the platform's sharpest structural error: an assessor holding no settlement authority
+# could not confirm a total loss, and an investigator could not clear a claim — the majority
+# outcome in real SIU work — while both could decline a claim outright, because the
+# authority check only ever guarded approvals.
+MONEY_DECISIONS = ("approve", "amend")
+FINDING_DECISIONS = ("confirm", "release", "refer", "request_more")
+ADVERSE_DECISIONS = ("reject",)
+DECISIONS = MONEY_DECISIONS + ADVERSE_DECISIONS + FINDING_DECISIONS
+
+# Declining a claim is the most consequential outcome on a file and is not a technical
+# finding. It needs settlement authority even though it pays nothing.
+DECLINE_REQUIRES_AUTHORITY = True
 
 
 class ReviewError(RuntimeError):
@@ -117,6 +129,81 @@ def _last_signed_package(db: Session, reference: str) -> dict[str, Any] | None:
     return entries[-1] if entries else None
 
 
+def _onward_queue_for(claim: Claim, task: ReviewTask) -> str:
+    """Where a confirmed technical finding goes for the money decision.
+
+    Sized on the amount *proposed*, not on the claim's settled amount — a claim awaiting a
+    technical confirmation has not been settled yet, so its settled amount is zero and
+    reading it would route every confirmed total loss to the handler regardless of value.
+    """
+    from app.config import AUTHORITY_LIMITS_EUR, LARGE_LOSS_THRESHOLD_EUR
+
+    amount = float(task.proposed_amount_eur or claim.settlement_amount_eur or 0.0)
+    if amount > LARGE_LOSS_THRESHOLD_EUR:
+        return "large_loss"
+    return "operations" if amount > AUTHORITY_LIMITS_EUR["claim_handler"] else "handler"
+
+
+def _handoff_for(
+    decision: str, claim: Claim, task: ReviewTask, staff: dict[str, Any]
+) -> tuple[str, str, str]:
+    """Where a recorded finding sends the claim, and why."""
+    role = staff["role_label"]
+    if decision == "confirm":
+        onward = _onward_queue_for(claim, task)
+        return (
+            onward, "technical_position_confirmed",
+            f"{role} confirmed the technical position; the settlement decision is next.",
+        )
+    if decision == "release":
+        return (
+            "handler", "released_no_finding",
+            f"{role} found nothing to substantiate; the claim returns to the handler.",
+        )
+    return (
+        "siu", "referred_for_investigation",
+        f"{role} referred the claim for investigation.",
+    )
+
+
+def _raise_successor(
+    db: Session,
+    *,
+    claim: Claim,
+    previous: ReviewTask,
+    queue: str,
+    reason: str,
+    reason_detail: str,
+    finding: str = "",
+) -> ReviewTask:
+    """The next task in the chain, carrying the finding that produced it."""
+    import secrets
+
+    from app.config import AUTHORITY_LIMITS_EUR
+    from app.personas import QUEUE_OWNERS
+
+    owners = QUEUE_OWNERS.get(queue) or ("claim_handler",)
+    authority_role = owners[0]
+    successor = ReviewTask(
+        task_id=f"TSK-{secrets.token_hex(4).upper()}",
+        claim_reference=claim.reference,
+        reason=reason,
+        reason_detail=(f"{reason_detail} {finding}".strip() if finding else reason_detail),
+        queue=queue,
+        authority_required=authority_role,
+        authority_limit_eur=AUTHORITY_LIMITS_EUR.get(authority_role, 0.0),
+        priority=previous.priority or 2,
+        status="open",
+        proposed_decision=previous.proposed_decision,
+        proposed_amount_eur=previous.proposed_amount_eur,
+        # The clock keeps running from the original notification: the customer has been
+        # waiting since the claim arrived, not since the hand-off.
+        sla_due_at=previous.sla_due_at,
+    )
+    db.add(successor)
+    return successor
+
+
 def decide(
     db: Session,
     task_id: str,
@@ -155,7 +242,51 @@ def decide(
         else round(float(task.proposed_amount_eur or 0.0), 2)
     )
 
-    if decision in ("approve", "amend"):
+    # A decline is an act of authority even at nil. Previously the check sat inside the
+    # approve branch, so a EUR 0-authority investigator could close a claim as declined
+    # through the API — the one outcome that role must never own.
+    if decision == "reject" and DECLINE_REQUIRES_AUTHORITY and authority <= 0.0:
+        steps.append({
+            "step": "authority_check", "passed": False,
+            "detail": (
+                f"{staff['role_label']} holds no settlement authority and cannot decline a "
+                "claim. Record a finding and refer it to someone who can."
+            ),
+        })
+        return {
+            "accepted": False,
+            "reason": "insufficient_authority_to_decline",
+            "required_authority_eur": 0.01,
+            "your_authority_eur": authority,
+            "steps": steps,
+        }
+
+    if decision in MONEY_DECISIONS:
+        from app.config import LARGE_LOSS_THRESHOLD_EUR
+
+        # Above every authority in the book this is a large loss. It is refused here like
+        # any other over-authority act, but the refusal says where it actually goes rather
+        # than leaving the file with nowhere to be.
+        if settle_amount > LARGE_LOSS_THRESHOLD_EUR:
+            steps.append({
+                "step": "authority_check", "passed": False,
+                "detail": (
+                    f"EUR {settle_amount:,.2f} is above the large-loss threshold of "
+                    f"EUR {LARGE_LOSS_THRESHOLD_EUR:,.2f}. This is a large-loss referral, "
+                    "not a desk approval."
+                ),
+            })
+            task.queue = "large_loss"
+            claim.assigned_queue = "large_loss"
+            db.commit()
+            return {
+                "accepted": False,
+                "reason": "large_loss_referral",
+                "required_authority_eur": settle_amount,
+                "your_authority_eur": authority,
+                "steps": steps,
+            }
+
         if settle_amount > authority:
             # Refused before anything is signed. This is the check that stops an adjuster
             # settling a supervisor's claim, and it does not depend on the UI hiding a button.
@@ -264,6 +395,23 @@ def decide(
             "detail": "Declined by a named person, with the reason recorded on the claim.",
         })
 
+    elif decision in ("confirm", "release", "refer"):
+        # A finding is a hand-off, not an ending. Resolving the task without raising the
+        # next one would leave the claim carrying a queue label with nothing on anybody's
+        # desk — the same unowned silence the platform already had at awaiting_customer.
+        onward, reason, detail = _handoff_for(decision, claim, task, staff)
+        claim.status = "in_review"
+        claim.stage = "human_review"
+        claim.assigned_queue = onward
+        successor = _raise_successor(
+            db, claim=claim, previous=task, queue=onward, reason=reason,
+            reason_detail=detail, finding=f"{staff['role_label']}: {note}" if note else "",
+        )
+        steps.append({
+            "step": "record_finding", "passed": True,
+            "detail": f"{detail} Raised {successor.task_id} on the {onward} queue.",
+        })
+
     else:  # request_more
         claim.status = "awaiting_customer"
         claim.stage = "intake"
@@ -276,7 +424,10 @@ def decide(
     task.decision = {
         "approve": "Approved", "amend": "Approved (amended)",
         "reject": "Declined", "request_more": "Request Information",
-    }[decision]
+        "confirm": "Technical position confirmed",
+        "release": "Released — no finding established",
+        "refer": "Referred for investigation",
+    }.get(decision, decision.replace("_", " ").capitalize())
     task.decision_note = note
     task.resolved_by = user_id
     task.resolved_at = dt.datetime.now(dt.timezone.utc)

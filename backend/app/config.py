@@ -241,6 +241,11 @@ AUTHORITY_LIMITS_EUR = {
     "motor_assessor": 0.0,
     # Operations owns the escalated approval above handler authority. Compliance and
     # Operations are one function here, and an approval is recorded as an Operations act.
+    #
+    # The ceiling is a large-loss referral point, not a hard stop: a total loss on an
+    # ordinary family car can exceed EUR 25,000, and a platform whose highest authority
+    # cannot approve a routine motor claim has no exit for that file at all. Above this,
+    # the claim is referred as a large loss rather than refused.
     "compliance_ops": 25_000.0,
     "siu": 0.0,
     # Older role names, kept so the gateway and the routing need no translation layer.
@@ -253,6 +258,13 @@ AUTHORITY_LIMITS_EUR = {
     "compliance_officer": 25_000.0,
     "compliance": 25_000.0,
 }
+
+# Above the highest settlement authority a claim is a large loss: it is referred, notified
+# and reserved differently, and in a real book it is where reinsurance attaches. The
+# platform does not model a treaty, but it must not silently have nowhere to send the file.
+LARGE_LOSS_THRESHOLD_EUR = float(
+    os.environ.get("LARGE_LOSS_THRESHOLD_EUR", "25000.00")
+)
 
 APPROVAL_TOKEN_TTL_SECONDS = int(os.environ.get("APPROVAL_TOKEN_TTL_SECONDS", "900"))
 

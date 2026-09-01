@@ -46,7 +46,10 @@ def assign(task_id: str, body: AssignRequest, db: Session = Depends(get_db)) -> 
 
 
 class DecideRequest(BaseModel):
-    decision: str          # approve | amend | reject | request_more
+    # approve | amend | reject move money or close a claim and need authority.
+    # confirm | release | refer | request_more record a professional finding
+    # and do not — an assessor confirming a total loss moves no money.
+    decision: str
     user_id: str
     amount_eur: float | None = None
     note: str = ""
