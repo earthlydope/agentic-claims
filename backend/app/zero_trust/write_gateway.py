@@ -119,7 +119,15 @@ def idempotency_key(envelope: dict[str, Any]) -> str:
 
 
 class SecureWriteGateway:
-    """Stateful per-tenant gateway: nonce watermark plus an idempotency ledger."""
+    """Stateful per-tenant gateway: nonce watermark plus an idempotency ledger.
+
+    The watermark lives in memory for speed but is *seeded from the ledger*, which is the
+    durable record. Holding it only in memory let the two diverge — replace or reset the
+    database under a running process and the gateway would refuse every subsequent write as
+    a replay, because it remembered a high-water mark the ledger no longer had. A control
+    that fails closed is right; a control that fails closed against its own stale state is
+    not.
+    """
 
     def __init__(self) -> None:
         self._nonce_watermark: dict[str, int] = {}
@@ -174,6 +182,37 @@ class SecureWriteGateway:
         return [t for t in self._approvals.values() if t.claim_id == claim_id]
 
     # -- the gateway -------------------------------------------------------
+    def prime_from_ledger(self) -> dict[str, int]:
+        """Recover each tenant's nonce watermark from the ledger.
+
+        The watermark lives in memory for speed; the ledger is the durable record. Holding
+        it only in memory let the two diverge — restart the process against an existing
+        ledger and the gateway would accept a nonce it had already written, and replace the
+        database under a running process and it would refuse every write as a replay. Both
+        are wrong, and both are fixed by reading the ledger once at startup.
+
+        Called at application startup, never inside the check itself: a control that has to
+        query the database on every write is a control that fails when the database is
+        slow.
+        """
+        try:
+            from sqlalchemy import func, select
+
+            from app.db import SessionLocal
+            from app.models import LedgerEntry
+
+            with SessionLocal() as session:
+                rows = session.execute(
+                    select(LedgerEntry.tenant, func.max(LedgerEntry.nonce))
+                    .group_by(LedgerEntry.tenant)
+                ).all()
+            for tenant, highest in rows:
+                if tenant:
+                    self._nonce_watermark[tenant] = int(highest or 0)
+        except Exception:  # noqa: BLE001 — never block startup on recovery
+            pass
+        return dict(self._nonce_watermark)
+
     def submit(
         self,
         envelope: dict[str, Any],
@@ -304,7 +343,7 @@ class SecureWriteGateway:
 
         committed_ref = f"CW-{secrets.token_hex(5).upper()}"
         self._seen_keys[key] = committed_ref
-        self._nonce_watermark[tenant] = nonce
+        self._nonce_watermark[tenant] = max(nonce, self._nonce_watermark.get(tenant, 0))
         add("commit", True, f"First write for key {key[:12]}… — committed once.")
 
         if needs:

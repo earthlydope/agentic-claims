@@ -73,6 +73,15 @@ async def probe_providers() -> None:
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+
+    # The write gateway's nonce watermark is in-memory; the ledger is the durable record.
+    # Recover it once here so a restart against an existing ledger neither re-accepts a
+    # nonce it has already written nor refuses every write as a replay.
+    from app.zero_trust.write_gateway import gateway
+
+    recovered = gateway.prime_from_ledger()
+    if recovered:
+        logging.info("write gateway nonce watermark recovered: %s", recovered)
     db = SessionLocal()
     try:
         if db.query(Claim).count() == 0:
