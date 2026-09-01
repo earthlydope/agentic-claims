@@ -144,6 +144,48 @@ def _onward_queue_for(claim: Claim, task: ReviewTask) -> str:
     return "operations" if amount > AUTHORITY_LIMITS_EUR["claim_handler"] else "handler"
 
 
+def _open_recovery_if_any(
+    db: Session, claim: Claim, *, previous: ReviewTask
+) -> ReviewTask | None:
+    """Raise a recovery task where a paid claim has somebody to recover from.
+
+    Deliberately conservative: a recovery needs a third party on the claim and a payment
+    that has actually been made. Without a third-party record the platform cannot say who
+    is being pursued — that is a gap this does not close — but it can at least put the file
+    in front of the person whose job it is, which is more than a status nobody ever reached.
+    """
+    if not claim.third_party_involved:
+        return None
+    if float(claim.settlement_amount_eur or 0.0) <= 0.0:
+        return None
+    if claim.incident_type in ("hail", "storm_damage", "flood", "fire", "glass_breakage"):
+        return None          # nature has no liability insurer
+
+    existing = db.scalars(
+        select(ReviewTask).where(
+            ReviewTask.claim_reference == claim.reference,
+            ReviewTask.queue == "recovery",
+            ReviewTask.status == "open",
+        )
+    ).first()
+    if existing is not None:
+        return existing
+
+    from app.models import Policy
+
+    policy = db.get(Policy, claim.policy_number)
+    excess = float(policy.excess_eur or 0.0) if policy else 0.0
+    claim.status = "recovery_open"
+    return _raise_successor(
+        db, claim=claim, previous=previous, queue="recovery",
+        reason="third_party_recovery",
+        reason_detail=(
+            f"Paid EUR {claim.settlement_amount_eur:,.2f} with a third party involved. "
+            f"The customer is also out of pocket for the EUR {excess:,.2f} excess."
+        ),
+    )
+
+
 def _handoff_for(
     decision: str, claim: Claim, task: ReviewTask, staff: dict[str, Any]
 ) -> tuple[str, str, str]:
@@ -383,6 +425,22 @@ def decide(
             claim.stage = "settlement"
             claim.settlement_amount_eur = settle_amount
             claim.closed_at = dt.datetime.now(dt.timezone.utc)
+
+            # A claim settled by a person is exactly as likely to have a recovery as one
+            # settled autonomously — more so, because third-party claims are the ones that
+            # go to a person. The graph only reached its recovery node on the
+            # straight-through edge and a human approval never re-enters the graph, so
+            # recovery_open was a status no claim in the system had ever held.
+            recovery = _open_recovery_if_any(db, claim, previous=task)
+            if recovery is not None:
+                steps.append({
+                    "step": "recovery_raised", "passed": True,
+                    "detail": (
+                        f"Third party involved and the claim is paid: {recovery.task_id} "
+                        f"raised on the recovery queue for EUR {settle_amount:,.2f} plus "
+                        "the excess."
+                    ),
+                })
 
     elif decision == "reject":
         claim.decision = "Declined"

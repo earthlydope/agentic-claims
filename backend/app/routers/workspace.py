@@ -89,8 +89,19 @@ def lifecycle() -> dict[str, Any]:
 # The persona's own work
 # --------------------------------------------------------------------------
 @router.get("/work")
-def work(persona: str = DEFAULT_PERSONA, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """What this persona has to do, and nothing that belongs to anybody else."""
+def work(
+    persona: str = DEFAULT_PERSONA,
+    queue: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """What this persona has to do, and nothing that belongs to anybody else.
+
+    `queue` narrows to one of the persona's own queues. Without it every view a persona has
+    rendered the same list: the Claim Handler's "Recovery" screen and their "My work"
+    screen called this endpoint identically and showed the same claims, so a declined,
+    unpaid, coverage-excluded claim appeared under "Settled claims where a third party may
+    owe us". A screen that lies is worse than a missing one.
+    """
     p = get_persona(persona)
     now = dt.datetime.now(dt.timezone.utc)
 
@@ -107,6 +118,16 @@ def work(persona: str = DEFAULT_PERSONA, db: Session = Depends(get_db)) -> dict[
         }
 
     queues = set(p.queues)
+    if queue:
+        requested = {normalise_queue(q) or q for q in queue.split(",") if q.strip()}
+        outside = requested - queues
+        if outside:
+            raise HTTPException(
+                403,
+                f"{p.role_label} does not work the "
+                f"{', '.join(sorted(outside))} queue(s).",
+            )
+        queues = requested
     tasks = db.scalars(select(ReviewTask).where(ReviewTask.status != "resolved")).all()
     mine = [t for t in tasks if (normalise_queue(t.queue) or t.queue) in queues]
     mine.sort(key=lambda t: (t.priority or 3, -(t.proposed_amount_eur or 0.0)))

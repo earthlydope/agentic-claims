@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
+
 from app.agents.harness import run_context
+from app.models import ExtractedField
 from app.semantic import knowledge, query_api
 from app.semantic.definitions import PANEL_CATALOGUE, STRUCTURAL_PANELS
 from app.zero_trust.sandbox import sandboxed_estimate_calculation
@@ -440,11 +443,168 @@ def get_reasonableness_band(severity: str, total_cost: float) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # Fraud & Risk
 # --------------------------------------------------------------------------
+def _derive_risk_signals(ctx: Any) -> list[dict[str, Any]]:
+    """Signals a claim carries on its own facts, computed at run time.
+
+    RiskSignal rows were written only by the seeder, so no claim filed through the platform
+    could ever carry one: every real notification scored 0.00 with no signals, PG-08 always
+    passed, and the fraud function was reachable on three hard-coded claims and nothing
+    else. These are the indicators derivable from what the claim itself knows — reporting
+    delay, claim velocity on the same party, repeat use of the same repairer, a prior claim
+    on the same vehicle, and a missing police report where the conditions require one.
+
+    They are signals, not findings. The weights are stated here rather than learned, which
+    is honest for a demonstration and is also how a governed indicator set starts.
+    """
+    import datetime as _dt
+
+    from app.models import Claim, Document
+
+    claim = ctx.db.get(Claim, ctx.claim_reference)
+    if claim is None:
+        return []
+
+    signals: list[dict[str, Any]] = []
+
+    # Late notification — AKHB Art 9 requires notification "unverzüglich".
+    if claim.incident_date and claim.reported_at:
+        try:
+            incident = claim.incident_date
+            if isinstance(incident, str):
+                incident = _dt.date.fromisoformat(incident[:10])
+            if isinstance(incident, _dt.datetime):
+                incident = incident.date()
+            reported = claim.reported_at
+            reported = reported.date() if isinstance(reported, _dt.datetime) else reported
+            days = (reported - incident).days
+            if days >= 60:
+                signals.append({
+                    "signal_type": "late_notification",
+                    "detail": f"Reported {days} days after the incident date.",
+                    "weight": 0.20 if days < 120 else 0.30,
+                })
+        except (ValueError, TypeError):
+            pass
+
+    # Claim velocity, measured against the book rather than against zero.
+    #
+    # An absolute count is not a signal: in any real portfolio most customers have some
+    # history, and a threshold picked without reference to the book fires on everybody.
+    # What is actually indicative is being well outside the normal distribution — so this
+    # compares the party against the median claimant and only speaks when they are clearly
+    # above it. Calibrating to the portfolio is also what stops a denser book quietly
+    # turning every claim into a referral.
+    siblings = ctx.db.scalars(
+        select(Claim).where(
+            Claim.party_id == claim.party_id, Claim.reference != claim.reference
+        )
+    ).all()
+    recent = [c for c in siblings if c.reported_at and claim.reported_at
+              and abs((claim.reported_at - c.reported_at).days) <= 240]
+    mine_count = len(recent) + 1
+
+    per_party: dict[str, int] = {}
+    for row in ctx.db.scalars(select(Claim.party_id)).all():
+        if row:
+            per_party[row] = per_party.get(row, 0) + 1
+    counts = sorted(per_party.values()) or [1]
+    median = counts[len(counts) // 2]
+
+    if mine_count >= max(4, median * 2):
+        signals.append({
+            "signal_type": "claim_velocity",
+            "detail": (
+                f"{mine_count} claims from this party in eight months, against a book "
+                f"median of {median}."
+            ),
+            "weight": 0.30,
+        })
+
+    # A prior claim on the same vehicle is ordinary; several in a short window is not.
+    same_vehicle = [c for c in recent if c.vin and c.vin == claim.vin]
+    if len(same_vehicle) >= 3:
+        signals.append({
+            "signal_type": "repeat_vehicle",
+            "detail": f"{len(same_vehicle)} claims on the same vehicle within eight months.",
+            "weight": 0.15,
+        })
+
+    # The same repairer across the party's claims, read off the documents.
+    repairers = {
+        f.extracted_value
+        for f in ctx.db.scalars(
+            select(ExtractedField).where(ExtractedField.field_name == "repairer_name")
+        ).all()
+        if f.extracted_value
+    } if siblings else set()
+    mine = {
+        f.extracted_value
+        for d in ctx.db.scalars(
+            select(Document).where(Document.claim_reference == ctx.claim_reference)
+        ).all()
+        for f in ctx.db.scalars(
+            select(ExtractedField).where(
+                ExtractedField.doc_id == d.doc_id,
+                ExtractedField.field_name == "repairer_name",
+            )
+        ).all()
+        if f.extracted_value
+    }
+    if mine and repairers and (mine & repairers) and len(recent) >= 1:
+        signals.append({
+            "signal_type": "repeat_repairer",
+            "detail": f"Same repairer as an earlier claim from this party: {sorted(mine & repairers)[0]}.",
+            "weight": 0.20,
+        })
+
+    # Parking damage with no police reference, which AKKB (VAV) Art 1 lit j requires.
+    if claim.incident_type == "parking_collision" and not claim.police_report_ref:
+        signals.append({
+            "signal_type": "missing_police_report",
+            "detail": "Parking damage reported without the police confirmation the "
+                      "conditions require.",
+            "weight": 0.05,
+        })
+
+    return signals
+
+
 def get_risk_signals() -> dict[str, Any]:
     """Read the duplicate, pattern, velocity and relationship signals recorded against
     this claim. Read-only fraud features."""
     ctx = run_context()
-    return query_api.execute("get_risk_signals", db=ctx.db, reference=ctx.claim_reference)
+    stored = query_api.execute("get_risk_signals", db=ctx.db, reference=ctx.claim_reference)
+
+    # Persist anything the claim's own facts imply, once, so the fraud picture is the same
+    # whether the claim was seeded or filed through the platform.
+    from app.models import RiskSignal as RiskSignalRow
+
+    existing = {
+        r.signal_type
+        for r in ctx.db.scalars(
+            select(RiskSignalRow).where(
+                RiskSignalRow.claim_reference == ctx.claim_reference
+            )
+        ).all()
+    }
+    added = False
+    for sig in _derive_risk_signals(ctx):
+        if sig["signal_type"] in existing:
+            continue
+        ctx.db.add(RiskSignalRow(
+            claim_reference=ctx.claim_reference,
+            signal_type=sig["signal_type"],
+            detail=sig["detail"],
+            weight=sig["weight"],
+            evidence_ref="derived-at-run-time",
+        ))
+        added = True
+    if added:
+        ctx.db.commit()
+        stored = query_api.execute(
+            "get_risk_signals", db=ctx.db, reference=ctx.claim_reference
+        )
+    return stored
 
 
 def graph_neighbours() -> dict[str, Any]:

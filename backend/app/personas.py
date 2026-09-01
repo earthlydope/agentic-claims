@@ -266,7 +266,7 @@ PERSONAS: tuple[Persona, ...] = (
         kind="staff",
         location="Wien",
         authority_limit_eur=5_000.0,
-        queues=("handler", "coverage"),
+        queues=("handler", "coverage", "recovery"),
         accent="blue",
         avatar="handler",
         remit="Owns the file. Cover, settlement within authority, referrals, recovery.",
@@ -438,6 +438,7 @@ def coworker_tools_for(key: str | None) -> tuple[str, ...]:
 # Queue → the personas that work it. Used to scope a work list to whoever is looking.
 QUEUE_OWNERS: dict[str, tuple[str, ...]] = {
     "handler": ("claim_handler", "compliance_ops"),
+    "recovery": ("claim_handler",),
     "coverage": ("claim_handler",),
     "assessment": ("motor_assessor",),
     "operations": ("compliance_ops",),

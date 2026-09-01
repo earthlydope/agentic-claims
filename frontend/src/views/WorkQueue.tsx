@@ -33,16 +33,28 @@ export function WorkQueue({
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
 
+  // Each view asks for its own queue. Without this every view a persona has rendered the
+  // same list, so Recovery showed the handler's whole desk under a recovery heading.
+  const QUEUE_FOR_FEATURE: Record<string, string | undefined> = {
+    // The desk is the claim queues. Recovery is a different job on a claim that has
+    // already been paid, so it is not also on the desk.
+    work_queue: 'handler,coverage',
+    recovery: 'recovery',
+    assessment_queue: 'assessment',
+    approvals: 'operations',
+    investigations: 'siu',
+  }
+
   const load = useCallback(() => {
     api
-      .work(persona.key)
+      .work(persona.key, QUEUE_FOR_FEATURE[feature])
       .then((d) => {
         setData(d)
         const tasks = (d.tasks as WorkTask[]) ?? []
         setSelected((prev) => prev ?? tasks[0]?.task_id ?? null)
       })
       .catch((e: Error) => setError(e.message))
-  }, [persona.key])
+  }, [persona.key, feature])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setData(null)

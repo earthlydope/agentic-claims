@@ -34,7 +34,11 @@ export const api = {
   personas: () => get('/personas'),
   persona: (key: string) => get(`/personas/${key}`),
   lifecycle: () => get('/lifecycle'),
-  work: (persona: string) => get(`/work?persona=${encodeURIComponent(persona)}`),
+  work: (persona: string, queue?: string) =>
+    get(
+      `/work?persona=${encodeURIComponent(persona)}` +
+        (queue ? `&queue=${encodeURIComponent(queue)}` : ''),
+    ),
   coworkerProfile: (persona: string) => get(`/coworker/${encodeURIComponent(persona)}`),
   coworkerAsk: (persona: string, question: string, conversation_id?: string | null) =>
     post('/coworker/ask', { persona, question, conversation_id: conversation_id ?? null }),
