@@ -699,6 +699,16 @@ def _authoritative_package(ctx: RunContext, claim: Claim) -> dict[str, Any]:
     }
 
 
+def _endorsements_on(claim: Claim) -> list[dict[str, Any]]:
+    """The endorsements the policy schedule actually carries."""
+    from app.db import SessionLocal
+    from app.models import Policy
+
+    session = Session.object_session(claim) or SessionLocal()
+    policy = session.get(Policy, claim.policy_number)
+    return list(policy.endorsements or []) if policy else []
+
+
 def _indemnity_basis(
     out: dict[str, Any], claim: Claim, *, gross_repair: float
 ) -> dict[str, Any]:
@@ -729,7 +739,11 @@ def _indemnity_basis(
     )
 
     # Neuwertersatz, where the schedule actually carries it and the age test passes.
-    endorsements = (out.get("coverage") or {}).get("endorsements") or []
+    # Read off the schedule, never from the model's output. An endorsement is a fact on
+    # the policy, and CoverageView forbids extra fields anyway — so taking it from the
+    # agent would have dropped it silently on the live path and made Neuwertersatz
+    # unreachable with a real model while working in deterministic mode.
+    endorsements = _endorsements_on(claim)
     has_new_for_old = any(
         (e.get("code") or "").upper() == "ZB-NEUWERT" for e in endorsements
     )
